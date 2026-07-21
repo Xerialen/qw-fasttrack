@@ -48,6 +48,26 @@ Smoke: `wsl -d Ubuntu-24.04 -e sh -c 'cd .../fasttrack && nice -n 19 python3 smo
 (bootar dm3, applicerar det 20/20-bevisade SNG-hoppet som patch, kör 3
 försök, dumpar grafen).
 
+## v1: live-viewer + demo-replay (skapandeloopen)
+
+- **`live_start(map, graph_name)` / `live_stop`** — single-owner-brygga
+  (enda kontrollägaren; proxy 27981 som `core.Control` auto-routar genom
+  via state-fil med nonce-ping) + WS 8093 → viewern på 8090
+  (`?graph=<name>&live=<port>`). Livelager: bot som gul kub, aktiv cell
+  gul, använda celler röd-bruna, använda länkar het gul→röd-gradient.
+  `L` togglar follow-kamera. Utan `?live` = statisk vy som förut.
+- **`demo_replay_start(qwd, graph_name)` / `demo_replay_stop`** — spela
+  upp en människodemo på meshen UTAN spelserver (WS 8095): använda
+  element highlightas under spelarens rörelse; allt meshen SAKNAR glöder
+  pulserande RÖTT med exakt geometri (ogrundade markpunkter, länklösa
+  traverseringar) — samma diff som `demo_ingest`, som ger patchen.
+- Kända begränsningar (klarspråk): länkattributionen är geometrisk med
+  tolerans (80u) och kan missa/överflagga i täta områden; `used`-listor
+  växer obegränsat per attempt (reset vid goto); bottens ruttval är dess
+  eget — smoken dömer app-egenskaper, inte ruttval (inspelning 2026-07-22
+  visade att botten föredrar norra gångvägen från stillastående framför
+  det planterade speedjumpet — fartbandsgate utan ansats, trolig orsak).
+
 ## Regler som gäller även här
 
 Förbjudna cvars (`rtx_bot_ledgecap`/`rtx_walljump`/`rtx_doublejump`) pinnade

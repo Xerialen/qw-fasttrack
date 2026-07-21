@@ -1,0 +1,12 @@
+{
+  "schema": "qw-fasttrack-status-sequence/1",
+  "source": "recorded dm3 stairs-to-SNG live jump; positions/cells only",
+  "planted_link_id": 50259,
+  "samples": [
+    {"t": 0.00, "pos": [-128, 832, 121], "cell": 942},
+    {"t": 0.07, "pos": [-145, 785, 121], "cell": 942},
+    {"t": 0.20, "pos": [-190, 700, 167], "cell": null},
+    {"t": 0.33, "pos": [-250, 610, 151], "cell": null},
+    {"t": 0.47, "pos": [-303, 526, 121], "cell": 684}
+  ]
+}

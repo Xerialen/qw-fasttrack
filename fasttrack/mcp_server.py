@@ -82,6 +82,35 @@ TOOLS = {
         "required": ["map", "seed"],
         "fn": lambda a: core.graph_dump(a["map"], a["seed"], a.get("name", "fasttrack")),
     },
+    "live_start": {
+        "desc": "Start the single-owner live bridge and isolated viewer. Args: map, graph_name. Returns the loopback viewer URL.",
+        "schema": {"map": "string", "graph_name": "string"},
+        "required": ["map", "graph_name"],
+        "fn": lambda a: core.live_start(a["map"], a["graph_name"]),
+    },
+    "live_stop": {
+        "desc": "Remove live routing state first, then stop bridge and any viewer unit started by live_start.",
+        "schema": {}, "required": [],
+        "fn": lambda a: core.live_stop(),
+    },
+    "demo_replay_start": {
+        "desc": "Replay a qwd on the mesh in the Movement Lab viewer (creation loop): the player's movement plays back live; used mesh elements highlight, MISSING elements glow red with exact geometry (unmeshed ground, linkless traversals) — ready to become a patch via demo_ingest. Needs NO game server. Args: demo (qwd path), graph_name (overlay name), speed (default 1.0). Returns viewer URL.",
+        "schema": {"demo": "string", "graph_name": "string", "speed": "number"},
+        "required": ["demo", "graph_name"],
+        "fn": lambda a: core.demo_replay_start(a["demo"], a["graph_name"],
+                                               float(a.get("speed", 1.0))),
+    },
+    "demo_replay_stop": {
+        "desc": "Stop the demo replay unit.",
+        "schema": {}, "required": [],
+        "fn": lambda a: core.demo_replay_stop(),
+    },
+    "missing_spec": {
+        "desc": "Export ALL accumulated mesh gaps as a navmesh-developer spec (qw-missing-spec/1 JSON in route-lab artifacts/nav-patches/). Args: name, map, demo (optional qwd path — exact offline diff incl. ready qw-nav-patch/1 for missing links; omit to snapshot the running live bridge's gaps).",
+        "schema": {"name": "string", "map": "string", "demo": "string"},
+        "required": ["name", "map"],
+        "fn": lambda a: core.missing_spec(a["name"], a["map"], a.get("demo")),
+    },
 }
 
 

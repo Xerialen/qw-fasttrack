@@ -7,28 +7,41 @@ forbidden cvars (permanent lab ban). Runs inside WSL (systemd --user).
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import socket
 import subprocess
+import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 # Own port block — never the deck's (8765/8767) or the orchestration's
 # (27504/06/08/16/21) ports. Control = game + 450 by lab convention.
 GAME_PORT, CONTROL_PORT, QTV_PORT = 27530, 27980, 29530
 UNIT = "fasttrack-server"
+LIVE_UNIT = "fasttrack-live-bridge"
+VIEWER_UNIT = "fasttrack-viewer"
+REPLAY_UNIT = "fasttrack-replay"
+REPLAY_WS_PORT = 8095
 
 RUNTIME = Path.home() / ".local" / "share" / "qw-fasttrack" / "runtime"
 STATE_DIR = Path.home() / ".local" / "share" / "qw-fasttrack"
 ACTIVE_PATCH = STATE_DIR / "active-patch.json"
 PATCHES_DIR = STATE_DIR / "patches"
 EVIDENCE_DIR = STATE_DIR / "evidence"
+LIVE_STATE = STATE_DIR / "live-bridge.json"
+VIEWER_OWNERSHIP = STATE_DIR / "live-viewer-owned.json"
 ROUTE_LAB = Path("/mnt/c/Users/benya/projects/quakeworld/route-lab")
 PROMOTE_DIR = ROUTE_LAB / "artifacts" / "nav-patches"
 SKELETON = Path.home() / ".local" / "share" / "route-lab" / "nav-ab"
 DEFAULT_LIB = Path.home() / ".local" / "share" / "route-lab" / "rtx-main" / "qw" / "qwprogs.so"
 DUMP_LIVE_GRAPH = Path("/mnt/c/Users/benya/projects/quakeworld/route-lab/ops/dump_live_graph.py")
 VIEWER_OVERLAYS = Path("/mnt/c/Users/benya/projects/quakeworld/route-lab/qw-nav-viewer/overlays")
+VIEWER_WORKTREE = Path("/mnt/c/Users/benya/projects/quakeworld/route-lab-viewer-live/qw-nav-viewer")
+FASTTRACK_DIR = Path(__file__).resolve().parent
+LIVE_BRIDGE = FASTTRACK_DIR / "live_bridge.py"
 
 # Forbidden cvars are pinned 0 (permanent lab ban) and bhop/curl stay on so
 # speed-jump links are built. Map is a parameter — nothing map-specific here.
@@ -66,11 +79,66 @@ class ControlError(RuntimeError):
     pass
 
 
+def _read_live_state() -> dict | None:
+    try:
+        state = json.loads(LIVE_STATE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    required = ("pid", "started_at", "nonce", "proxy", "ws")
+    return state if all(key in state for key in required) else None
+
+
+def _remove_live_state(expected_nonce: str | None = None) -> None:
+    try:
+        if expected_nonce is not None:
+            current = json.loads(LIVE_STATE.read_text(encoding="utf-8"))
+            if current.get("nonce") != expected_nonce:
+                return
+        LIVE_STATE.unlink(missing_ok=True)
+    except (OSError, json.JSONDecodeError):
+        pass
+
+
+def _connect_live_proxy(state: dict, timeout: float) -> socket.socket:
+    pid = int(state["pid"])
+    os.kill(pid, 0)
+    sock = socket.create_connection(("127.0.0.1", int(state["proxy"])), timeout=timeout)
+    try:
+        sock.settimeout(timeout)
+        sock.sendall(b"0 __ping__\n")
+        buf = b""
+        while b"\n" not in buf:
+            chunk = sock.recv(4096)
+            if not chunk:
+                raise ConnectionError("live proxy closed during ping")
+            buf += chunk
+        reply = json.loads(buf.split(b"\n", 1)[0])
+        if reply.get("ok") is not True or reply.get("nonce") != state["nonce"]:
+            raise ValueError("live proxy nonce mismatch")
+        return sock
+    except Exception:
+        sock.close()
+        raise
+
+
 class Control:
     """Newline-JSON control client (single connection, request/reply + events)."""
 
     def __init__(self, host: str = "127.0.0.1", port: int = CONTROL_PORT, timeout: float = 30.0):
-        self._socket = socket.create_connection((host, port), timeout=timeout)
+        self._socket = None
+        if host == "127.0.0.1" and port == CONTROL_PORT:
+            state = _read_live_state()
+            if state is not None:
+                try:
+                    self._socket = _connect_live_proxy(state, min(timeout, 1.0))
+                except (OSError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
+                    _remove_live_state(state.get("nonce"))
+                    print(
+                        f"warning: stale live bridge state removed; using direct control: {exc}",
+                        file=sys.stderr,
+                    )
+        if self._socket is None:
+            self._socket = socket.create_connection((host, port), timeout=timeout)
         self._next_id = 1
         self._buf = b""
         self.events: list[dict] = []
@@ -172,7 +240,7 @@ def server_up(map: str, bots: int = 1, lib: str | None = None) -> dict:
             "map": map, "ready": ready, "replant": replant}
 
 
-def wait_ready(timeout_s: int = 900) -> dict:
+def wait_ready(timeout_s: int = 1800) -> dict:
     """Poll the control socket until navmesh=ready and a live bot exists."""
     deadline = time.monotonic() + timeout_s
     last_err = None
@@ -355,16 +423,219 @@ def graph_dump(map: str, seed: list[float], out_name: str = "fasttrack") -> dict
     """Dump the live graph via route-lab's dump_live_graph.py and install it
     as a viewer overlay (<out_name>-graph.json). Seed = any walkable point on
     the map (crawl start) — map-agnostic, caller supplies it."""
+    if LIVE_STATE.exists():
+        raise RuntimeError("stoppa live-bryggan först")
     out = VIEWER_OVERLAYS / f"{out_name}-graph.json"
     _sh("python3", str(DUMP_LIVE_GRAPH), "--port", str(CONTROL_PORT),
         "--map", map, "--seed", *(f"{x:g}" for x in seed), "--out", str(out))
     return {"out": str(out), "viewer": f"http://127.0.0.1:8088/?graph={out_name}"}
 
 
+def _safe_overlay_name(name: str) -> bool:
+    return bool(name) and all(ch.isascii() and (ch.isalnum() or ch in "-_") for ch in name)
+
+
+def _http_ready(port: int, timeout: float = 1.0) -> bool:
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=timeout) as response:
+            return 200 <= response.status < 500
+    except (OSError, urllib.error.URLError):
+        return False
+
+
+def _unit_active(unit: str) -> bool:
+    return subprocess.run(
+        ["systemctl", "--user", "is-active", "--quiet", unit], capture_output=True
+    ).returncode == 0
+
+
+def _wait_for_state(timeout_s: float = 45.0) -> dict:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        state = _read_live_state()
+        if state is not None:
+            return state
+        if not _unit_active(LIVE_UNIT):
+            logs = subprocess.run(
+                ["journalctl", "--user", "-u", LIVE_UNIT, "-n", "30", "--no-pager"],
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            raise RuntimeError(f"live bridge stopped before readiness: {logs[-2000:]}")
+        time.sleep(0.2)
+    raise TimeoutError("live bridge did not publish readiness state within 45s")
+
+
+def live_start(map: str, graph_name: str) -> dict:
+    """Start the single-owner bridge, then ensure the isolated viewer is served."""
+    if not _safe_overlay_name(graph_name):
+        raise ValueError("graph_name must contain only ASCII letters, digits, '-' or '_'")
+    graph = VIEWER_WORKTREE / "overlays" / f"{graph_name}-graph.json"
+    if not graph.exists():
+        raise FileNotFoundError(f"viewer graph not found: {graph}")
+    if not (SKELETON / "qw" / "maps" / f"{map}.bsp").exists():
+        raise ValueError(f"map {map!r} not in skeleton maps")
+
+    _remove_live_state()
+    subprocess.run(["systemctl", "--user", "stop", LIVE_UNIT], capture_output=True)
+    _sh(
+        "systemd-run", "--user", "--collect", f"--unit={LIVE_UNIT}",
+        f"--working-directory={FASTTRACK_DIR.parent}", "--property=Nice=19", "--",
+        "python3", "-u", str(LIVE_BRIDGE), "--control", str(CONTROL_PORT),
+        "--graph", str(graph), "--ws-port", "8093", "--proxy-port", "27981",
+    )
+    state = _wait_for_state()
+
+    viewer_started = False
+    if not _http_ready(8090):
+        subprocess.run(["systemctl", "--user", "stop", VIEWER_UNIT], capture_output=True)
+        trunk = Path.home() / ".cargo" / "bin" / "trunk"
+        _sh(
+            "systemd-run", "--user", "--collect", f"--unit={VIEWER_UNIT}",
+            f"--working-directory={VIEWER_WORKTREE}", "--property=Nice=19", "--",
+            "nice", "-n", "19", str(trunk), "serve", "--port", "8090", "--address", "127.0.0.1",
+        )
+        viewer_started = True
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        VIEWER_OWNERSHIP.write_text(json.dumps({"unit": VIEWER_UNIT}), encoding="utf-8")
+        deadline = time.monotonic() + 180.0
+        while time.monotonic() < deadline and not _http_ready(8090, timeout=2.0):
+            if not _unit_active(VIEWER_UNIT):
+                logs = subprocess.run(
+                    ["journalctl", "--user", "-u", VIEWER_UNIT, "-n", "40", "--no-pager"],
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+                raise RuntimeError(f"viewer stopped before readiness: {logs[-3000:]}")
+            time.sleep(1.0)
+        if not _http_ready(8090, timeout=2.0):
+            raise TimeoutError("viewer did not answer on 8090 within 180s")
+    else:
+        VIEWER_OWNERSHIP.unlink(missing_ok=True)
+
+    url = f"http://127.0.0.1:8090/?graph={graph_name}&live={state['ws']}"
+    return {
+        "map": map,
+        "graph": graph_name,
+        "url": url,
+        "proxy": state["proxy"],
+        "ws": state["ws"],
+        "viewer_started": viewer_started,
+    }
+
+
+def live_stop() -> dict:
+    """Remove routing state first, then stop units owned by live_start."""
+    _remove_live_state()
+    subprocess.run(["systemctl", "--user", "stop", LIVE_UNIT], capture_output=True)
+    viewer_stopped = False
+    if VIEWER_OWNERSHIP.exists():
+        VIEWER_OWNERSHIP.unlink(missing_ok=True)
+        subprocess.run(["systemctl", "--user", "stop", VIEWER_UNIT], capture_output=True)
+        viewer_stopped = True
+    if LIVE_STATE.exists():
+        raise RuntimeError("live bridge state file remained after stop")
+    return {
+        "bridge_stopped": not _unit_active(LIVE_UNIT),
+        "viewer_stopped": viewer_stopped and not _unit_active(VIEWER_UNIT),
+        "state_removed": not LIVE_STATE.exists(),
+    }
+
+
 def _wsl_path(p: str) -> str:
     if len(p) > 2 and p[1] == ":" and (p[2] == "\\" or p[2] == "/"):
         return f"/mnt/{p[0].lower()}/" + p[3:].replace("\\", "/")
     return p
+
+
+def _start_viewer_if_needed() -> bool:
+    """Serve the worktree viewer on 8090 as a unit unless it already answers."""
+    if _http_ready(8090):
+        return False
+    subprocess.run(["systemctl", "--user", "stop", VIEWER_UNIT], capture_output=True)
+    trunk = Path.home() / ".cargo" / "bin" / "trunk"
+    _sh("systemd-run", "--user", "--collect", f"--unit={VIEWER_UNIT}",
+        f"--working-directory={VIEWER_WORKTREE}", "--property=Nice=19", "--",
+        "nice", "-n", "19", str(trunk), "serve", "--port", "8090", "--address", "127.0.0.1")
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    VIEWER_OWNERSHIP.write_text(json.dumps({"unit": VIEWER_UNIT}), encoding="utf-8")
+    deadline = time.monotonic() + 180.0
+    while time.monotonic() < deadline and not _http_ready(8090, timeout=2.0):
+        if not _unit_active(VIEWER_UNIT):
+            logs = subprocess.run(
+                ["journalctl", "--user", "-u", VIEWER_UNIT, "-n", "40", "--no-pager"],
+                capture_output=True, text=True).stdout.strip()
+            raise RuntimeError(f"viewer stopped before readiness: {logs[-3000:]}")
+        time.sleep(1.0)
+    if not _http_ready(8090, timeout=2.0):
+        raise TimeoutError("viewer did not answer on 8090 within 180s")
+    return True
+
+
+def demo_replay_start(demo: str, graph_name: str, speed: float = 1.0) -> dict:
+    """Replay a qwd on the mesh in the viewer — the creation loop.
+
+    Used elements highlight; mesh gaps glow red with exact geometry
+    (unmeshed ground, linkless traversals). Needs NO game server and does
+    not touch the control channel — safe alongside live_start."""
+    demo_path = _wsl_path(demo)
+    if not Path(demo_path).exists():
+        raise FileNotFoundError(f"demo {demo_path} not found")
+    # Same file the browser fetches (worktree serve dir) — sha guard must match.
+    graph_path = VIEWER_WORKTREE / "overlays" / f"{graph_name}-graph.json"
+    if not graph_path.exists():
+        raise FileNotFoundError(f"viewer graph not found: {graph_path}")
+    subprocess.run(["systemctl", "--user", "stop", REPLAY_UNIT], capture_output=True)
+    _sh("systemd-run", "--user", "--collect", f"--unit={REPLAY_UNIT}",
+        "--property=Nice=19", "--",
+        "python3", str(FASTTRACK_DIR / "demo_replay.py"),
+        "--demo", demo_path, "--graph", str(graph_path),
+        "--ws-port", str(REPLAY_WS_PORT), "--speed", f"{speed:g}", "--loop")
+    _start_viewer_if_needed()
+    if not _unit_active(REPLAY_UNIT):
+        logs = subprocess.run(
+            ["journalctl", "--user", "-u", REPLAY_UNIT, "-n", "30", "--no-pager"],
+            capture_output=True, text=True).stdout.strip()
+        raise RuntimeError(f"replay unit died on start: {logs[-2000:]}")
+    return {"demo": Path(demo_path).name, "graph": graph_name, "ws": REPLAY_WS_PORT,
+            "url": f"http://127.0.0.1:8090/?graph={graph_name}&live={REPLAY_WS_PORT}"}
+
+
+def demo_replay_stop() -> dict:
+    subprocess.run(["systemctl", "--user", "stop", REPLAY_UNIT], capture_output=True)
+    return {"replay_stopped": not _unit_active(REPLAY_UNIT)}
+
+
+def missing_spec(name: str, map: str, demo: str | None = None) -> dict:
+    """Export the accumulated mesh-gap list as a navmesh-developer spec.
+
+    Source: a demo (offline, exact — reruns the coverage diff) or, without
+    `demo`, the running live bridge's accumulated gaps (__missing__). Writes
+    route-lab artifacts/nav-patches/<map>-<name>-missing-spec.json."""
+    if demo is not None:
+        import demo_mesh
+        graph_file = VIEWER_WORKTREE / "overlays" / f"{map}-graph.json"
+        if not graph_file.exists():
+            graph_file = VIEWER_OVERLAYS / f"{map}-graph.json"
+        result = demo_mesh.ingest(_wsl_path(demo), map, str(graph_file), name)
+        payload = {"source": {"demo": Path(_wsl_path(demo)).name},
+                   "summary": result["summary"],
+                   "patch_for_missing_links": result["patch"]}
+    else:
+        c = Control()
+        try:
+            data = c.request("__missing__")["data"]
+        finally:
+            c.close()
+        payload = {"source": {"live_bridge": True}, "missing_by_actor": data}
+    PROMOTE_DIR.mkdir(parents=True, exist_ok=True)
+    out = PROMOTE_DIR / f"{map}-{name}-missing-spec.json"
+    out.write_text(json.dumps({
+        "schema": "qw-missing-spec/1", "map": map, "name": name, **payload,
+    }, indent=1), encoding="utf-8")
+    return {"spec": str(out),
+            "note": "spec till navmesh-utvecklaren; för länkar finns adds-formatet "
+                    "redo att planteras/patchas (qw-nav-patch/1)"}
 
 
 def demo_ingest(demo: str, map: str, name: str | None = None,

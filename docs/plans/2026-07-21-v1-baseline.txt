@@ -1,0 +1,71 @@
+start_sha: 746e5487f8a4c3be61bf7d94ef452f2901aab5f6
+status_porcelain:
+ M artifacts/dm3-sheet-validation-20260718/replacements.json
+ M artifacts/dm3-sheet-validation-20260718/verdicts.json
+ M artifacts/route-smoke/dm3-graph-668fa1c.json
+ M artifacts/rtx-watch/human-calib-40361/summary.json
+ M artifacts/rtx-watch/human-calib-40361/traversals.json
+ M artifacts/rtx-watch/qwd-calib-ingest/csv/milton_dm3_lift_to_sng_mega.csv
+ M artifacts/rtx-watch/qwd-calib-ingest/csv/milton_dm3_window_to_rl_1.csv
+ M artifacts/rtx-watch/qwd-calib-ingest/csv/xer100m.csv
+ M artifacts/rtx-watch/qwd-calib-ingest/csv/xeri-hoppa-dm3.csv
+ M artifacts/rtx-watch/qwd-calib-ingest/csv/xerpentrj.csv
+ M artifacts/rtx-watch/qwd-calib-ingest/csv/xersngmega.csv
+ M artifacts/rtx-watch/qwd-calib-ingest/milton_dm3_lift_to_sng_mega.json
+ M artifacts/rtx-watch/qwd-calib-ingest/milton_dm3_window_to_rl_1.json
+ M artifacts/rtx-watch/qwd-calib-ingest/summary.json
+ M artifacts/rtx-watch/qwd-calib-ingest/xer100m.json
+ M artifacts/rtx-watch/qwd-calib-ingest/xeri-hoppa-dm3.json
+ M artifacts/rtx-watch/qwd-calib-ingest/xerpentrj.json
+ M artifacts/rtx-watch/qwd-calib-ingest/xersngmega.json
+ M benchwall/data/scoreboard.json
+ M benchwall/screens.json
+ M benchwall/validation/test-series-follow.png
+ M benchwall/validation/test-series-refollow.png
+ M data/milton-chase-timer.json
+ M docs/plans/2026-07-19-auditor-handoff.md
+ M docs/plans/2026-07-19-spawn7-orchestration.md
+ M docs/plans/2026-07-20-rtx-watch-spec.md
+ M docs/rtx-watch/state.json
+ M docs/rtx-watch/watch-log.jsonl
+ M match-deck/.gitignore
+ M match-deck/AGENTS.md
+ M match-deck/CLAUDE.md
+ M match-deck/README.md
+ M match-deck/bench_series.py
+ M match-deck/control_deck.py
+ M match-deck/data/dm3-movement-catalog-v1.json
+ M match-deck/data/qwd-dm3-movement-baseline-v1.json
+ M match-deck/docs/2026-07-16-benchdeck-capacity.md
+ M match-deck/docs/2026-07-16-rex-bench-mcp-port.md
+ M match-deck/komodo_scratch.py
+ M match-deck/mcp_server.py
+ M match-deck/movement_evidence.py
+ M match-deck/qw_command_batch.py
+ M match-deck/run.ps1
+ M match-deck/server.py
+ M match-deck/static/app.js
+ M match-deck/static/index.html
+ M match-deck/static/name_policy.mjs
+ M match-deck/static/styles.css
+ M match-deck/tests/test_bench_series.py
+ M match-deck/tests/test_control_deck.py
+ M match-deck/tests/test_name_policy.mjs
+ M match-deck/wsl_lease.py
+ M ops/benchwall_pov_watch.py
+ M ops/dm3_ab_loop.py
+ M tests/test_benchwall_pov_watch.py
+?? artifacts/human-calib/
+?? artifacts/route-smoke/grid-bracket-default-219b248-normalized.json
+?? artifacts/route-smoke/grid-bracket-p16-219b248-normalized.json
+?? artifacts/route-smoke/grid-bracket-p8-219b248-normalized.json
+?? artifacts/route-smoke/grid-bracket-p8-connectivity-219b248-normalized.json
+?? artifacts/route-smoke/grid-bracket-p8-gatefix-oldgraph.json
+?? artifacts/rtx-watch/recap-1329d57-work/
+?? artifacts/sng-trial/
+?? match-deck/deck-8767.err
+?? qw-nav-viewer/overlays/dm3-hexbowl-draft-patch.json
+?? qw-nav-viewer/overlays/fasttrack-graph.json
+?? qw-nav-viewer/overlays/xersng-req-graph.json
+?? qw-nav-viewer/validation/hexbowl-after-draft.png
+?? qw-nav-viewer/validation/hexbowl-before-blockers.png

@@ -1,26 +1,44 @@
 # Current Stage
 
-last-verified: YYYY-MM-DD   <!-- bump this whenever you reconcile against reality -->
-status: active              <!-- active | parked | abandoned -->
-maturity: stage-0-idea      <!-- stage-0-idea | stage-1-prototype | stage-2-active | stage-3-multi-agent -->
+last-verified: 2026-07-21
+status: active
+maturity: stage-1-prototype
 
 ## Current goal
-What are we trying to prove or build right now?
+
+Build fasttrack v1 live-viewer: show the bot moving on the map and navmesh in
+real time, with the navmesh elements used by the current attempt clearly
+highlighted. The implementation contract is
+`docs/plans/2026-07-21-v1-live-viewer.md`, including its final rev-3 rulings.
 
 ## Why this matters
-How does it connect to the north star?
+
+It closes the movement-lab feedback loop: an owner can run a trial and inspect
+the bot, active cell, and attributed links in one live browser view.
 
 ## Next smallest useful step
-One concrete task.
+
+Complete T0-T6 in the v1 plan and preserve terminal and reviewer evidence.
 
 ## Active constraints
-What must not be changed or expanded?
+
+- Keep library code map-agnostic; dm3 is allowed only in smoke/fixtures/docs.
+- Do not modify bot/engine code or route-lab's main worktree.
+- Preserve the protected ports listed in the v1 plan.
+- Viewer work happens only on the isolated `viewer-live-fasttrack` worktree.
 
 ## Stop conditions
-When should the agent stop and ask?
+
+Stop if the documented graph/control contracts cannot be reconciled with live
+behavior, or if an exact plan requirement would require touching a protected
+port, the route-lab main tree, or bot/engine code.
 
 ## Last known state
-What happened in the previous session?
+
+The v0 server/control/MCP prototype exists. The live bridge, live viewer layer,
+and lifecycle tools are not yet implemented.
 
 ## Required docs to update
-Which docs must be updated before ending?
+
+`docs/findings-log.md`, `docs/testing-and-validation.md`, and `README.md` must
+carry the implementation and verification evidence before completion.
