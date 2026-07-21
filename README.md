@@ -22,6 +22,24 @@ som äger en egen rtx-experimentserver i WSL:
 - `graph_dump` installerar live-grafen som Movement Lab-overlay och
   returnerar viewer-URL.
 
+## Demo -> mesh -> produktion
+
+- **`demo_ingest(demo, map)`** — "den här spelarens qwd krävde den här meshen":
+  markplatåer -> krävda celler, luftsegment -> krävda hopplänkar (dedupade,
+  med uppmätt fart). Diffas mot en `qw-nav-graph/1`-dump (kör `graph_dump`
+  först). Ut: coverage-sammanfattning, demo-meshen som viewer-overlay
+  (täckta hopp = Jump, saknade = SpeedJump), och en färdig `qw-nav-patch/1`
+  för de saknade hoppen. Regel 11.2 per konstruktion: bara placering/mål/fart,
+  aldrig trajektorier/inputs. qwd tills vidare (mvd-parser saknas).
+  Cell-diffen är validerad mot känd sanning (xersng.qwd flaggar exakt den
+  omeshade z=163-hyllan). Hopp-diffen är strikt — den kräver en direkt länk
+  mellan ändpunkterna, så bunnyhops längs gåbart golv överflaggas som saknade.
+- **`trial`** skriver nu ett bevisregister (jsonl per aktiv patch).
+- **`promote(name, map)`** — experiment -> produktion i ett kommando: vägrar
+  utan trial-bevis, skriver patch + proveniens + bevis till
+  `route-lab/artifacts/nav-patches/` och utkastar hand-off för orkestratorns
+  PR-lane. Commit lämnas till operatören (hint returneras).
+
 Registrering (`~/.claude.json` → `mcpServers.fasttrack`): `wsl.exe -d
 Ubuntu-24.04 -e python3 /mnt/c/.../qw-fasttrack/fasttrack/mcp_server.py`.
 Ny session krävs för att verktygen ska synas.

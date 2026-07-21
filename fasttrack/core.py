@@ -21,6 +21,10 @@ UNIT = "fasttrack-server"
 RUNTIME = Path.home() / ".local" / "share" / "qw-fasttrack" / "runtime"
 STATE_DIR = Path.home() / ".local" / "share" / "qw-fasttrack"
 ACTIVE_PATCH = STATE_DIR / "active-patch.json"
+PATCHES_DIR = STATE_DIR / "patches"
+EVIDENCE_DIR = STATE_DIR / "evidence"
+ROUTE_LAB = Path("/mnt/c/Users/benya/projects/quakeworld/route-lab")
+PROMOTE_DIR = ROUTE_LAB / "artifacts" / "nav-patches"
 SKELETON = Path.home() / ".local" / "share" / "route-lab" / "nav-ab"
 DEFAULT_LIB = Path.home() / ".local" / "share" / "route-lab" / "rtx-main" / "qw" / "qwprogs.so"
 DUMP_LIVE_GRAPH = Path("/mnt/c/Users/benya/projects/quakeworld/route-lab/ops/dump_live_graph.py")
@@ -270,7 +274,18 @@ def patch_apply(patch: dict, store: bool = True) -> dict:
     if store:
         STATE_DIR.mkdir(parents=True, exist_ok=True)
         ACTIVE_PATCH.write_text(json.dumps(patch, indent=1), encoding="utf-8")
+        if patch.get("name"):
+            PATCHES_DIR.mkdir(parents=True, exist_ok=True)
+            (PATCHES_DIR / f"{patch['name']}.json").write_text(
+                json.dumps(patch, indent=1), encoding="utf-8")
     return summary
+
+
+def _active_patch_name() -> str:
+    try:
+        return json.loads(ACTIVE_PATCH.read_text(encoding="utf-8")).get("name") or "nopatch"
+    except (OSError, json.JSONDecodeError):
+        return "nopatch"
 
 
 def replant_active_patch() -> dict | None:
@@ -325,7 +340,13 @@ def trial(start: list[float], target: list[float], attempts: int = 20,
                          "t": (ev or {}).get("t"), "dist": (ev or {}).get("dist"),
                          "final": final})
         ok = sum(1 for r in rows if r["outcome"] in ("arrived", "stall_in_box"))
-        return {"bot": bot, "attempts": attempts, "ok": ok, "rows": rows}
+        result = {"bot": bot, "attempts": attempts, "ok": ok, "rows": rows}
+        # Evidence ledger keyed by the active patch: promote() refuses without it.
+        EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
+        with (EVIDENCE_DIR / f"{_active_patch_name()}.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": time.time(), "start": start, "target": target,
+                                 **result}) + "\n")
+        return result
     finally:
         c.close()
 
@@ -338,3 +359,98 @@ def graph_dump(map: str, seed: list[float], out_name: str = "fasttrack") -> dict
     _sh("python3", str(DUMP_LIVE_GRAPH), "--port", str(CONTROL_PORT),
         "--map", map, "--seed", *(f"{x:g}" for x in seed), "--out", str(out))
     return {"out": str(out), "viewer": f"http://127.0.0.1:8088/?graph={out_name}"}
+
+
+def _wsl_path(p: str) -> str:
+    if len(p) > 2 and p[1] == ":" and (p[2] == "\\" or p[2] == "/"):
+        return f"/mnt/{p[0].lower()}/" + p[3:].replace("\\", "/")
+    return p
+
+
+def demo_ingest(demo: str, map: str, name: str | None = None,
+                graph: str | None = None, min_link_dist: float = 96.0,
+                player: int | None = None) -> dict:
+    """Demo -> required mesh: coverage diff + viewer overlay + ready patch.
+
+    `graph` = qw-nav-graph/1 JSON to diff against — a path, or an overlay
+    name in the viewer overlays dir. Default: <map>-graph.json there (run
+    graph_dump first for a live one). qwd only for now."""
+    demo_path = _wsl_path(demo)
+    if demo_path.endswith(".mvd"):
+        raise ValueError("mvd not supported yet — use the qwd (positions parser pending)")
+    name = name or Path(demo_path).stem
+    if graph is None:
+        graph = str(VIEWER_OVERLAYS / f"{map}-graph.json")
+    elif "/" not in graph and "\\" not in graph:
+        graph = str(VIEWER_OVERLAYS / f"{graph}-graph.json")
+    else:
+        graph = _wsl_path(graph)
+    if not Path(graph).exists():
+        raise FileNotFoundError(f"graph {graph} not found — run graph_dump first "
+                                f"or pass graph=<overlay name|path>")
+    import demo_mesh
+    result = demo_mesh.ingest(demo_path, map, graph, name, min_link_dist, player)
+    overlay_path = VIEWER_OVERLAYS / f"{name}-graph.json"
+    overlay_path.write_text(json.dumps(result["overlay"], separators=(",", ":")),
+                            encoding="utf-8")
+    PATCHES_DIR.mkdir(parents=True, exist_ok=True)
+    patch_path = PATCHES_DIR / f"{name}.json"
+    patch_path.write_text(json.dumps(result["patch"], indent=1), encoding="utf-8")
+    return {"summary": result["summary"], "duration_s": result["duration_s"],
+            "diffed_against": graph,
+            "overlay": str(overlay_path),
+            "viewer": f"http://127.0.0.1:8088/?graph={name}",
+            "patch": str(patch_path),
+            "patch_adds": len(result["patch"]["adds"]),
+            "next": f"patch_apply(<patch file content>) -> trial(...) -> promote({name!r})"}
+
+
+def promote(name: str, map: str) -> dict:
+    """Promote a proven patch to production: route-lab artifact + hand-off.
+
+    Refuses without trial evidence (the ledger trial() writes). Production =
+    artifacts/nav-patches/ in route-lab plus a hand-off draft for the
+    orchestrator PR lane; committing is left to the operator."""
+    patch_path = PATCHES_DIR / f"{name}.json"
+    if not patch_path.exists():
+        raise FileNotFoundError(f"no stored patch {name!r} — apply it via patch_apply first")
+    evidence_path = EVIDENCE_DIR / f"{name}.jsonl"
+    if not evidence_path.exists():
+        raise RuntimeError(f"no trial evidence for {name!r} — run trial() with the patch active")
+    records = [json.loads(line) for line in
+               evidence_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    attempts = sum(r["attempts"] for r in records)
+    ok = sum(r["ok"] for r in records)
+    if ok == 0:
+        raise RuntimeError(f"evidence for {name!r} is all failures ({attempts} attempts) — not promotable")
+    patch = json.loads(patch_path.read_text(encoding="utf-8"))
+    PROMOTE_DIR.mkdir(parents=True, exist_ok=True)
+    artifact = PROMOTE_DIR / f"{map}-{name}.json"
+    artifact.write_text(json.dumps({
+        **patch,
+        "provenance": {**(patch.get("provenance") or {}),
+                       "promoted_by": "qw-fasttrack",
+                       "evidence": {"trials": len(records), "attempts": attempts, "ok": ok,
+                                    "file": f"{map}-{name}-evidence.jsonl"}},
+    }, indent=1), encoding="utf-8")
+    shutil.copy2(evidence_path, PROMOTE_DIR / f"{map}-{name}-evidence.jsonl")
+    handoff = PROMOTE_DIR / f"{map}-{name}-handoff.md"
+    handoff.write_text(f"""# Nav-patch hand-off: {map} / {name}
+
+Bevisad i qw-fasttrack: **{ok}/{attempts} arrived** over {len(records)} trial run(s)
+(evidence: `{map}-{name}-evidence.jsonl`, per-attempt rows).
+
+- Patch: `{artifact.name}` (schema qw-nav-patch/1 — adds plantable via
+  `planlink from takeoff to v_req` after setting any listed cvars).
+- Rule 11.2 clean: placement/target values only, no trajectories/inputs.
+- Planted links die on map restart: production servers need the plant in
+  their boot path (same replant pattern as fasttrack's server_up).
+
+Suggested next step: PR into the rtx-main lane per the 7-step owner route
+protocol (route -> corpus -> 20x zero-wall -> analyst -> nanos tests -> PR).
+""", encoding="utf-8")
+    return {"artifact": str(artifact), "evidence": {"trials": len(records),
+                                                    "attempts": attempts, "ok": ok},
+            "handoff": str(handoff),
+            "commit_hint": f"git -C {ROUTE_LAB} add artifacts/nav-patches && "
+                           f"git -C {ROUTE_LAB} commit -m 'nav-patch: {map}/{name} ({ok}/{attempts})'"}

@@ -61,6 +61,21 @@ TOOLS = {
                                    a.get("bot"), float(a.get("settle_s", 0.6)),
                                    float(a.get("timeout_s", 20.0)), a.get("arrive_box")),
     },
+    "demo_ingest": {
+        "desc": "Demo -> required mesh: extract ground coverage + jump links a player's qwd needed, diff vs a qw-nav-graph/1 dump, install the demo-mesh as a viewer overlay and emit a ready qw-nav-patch/1 for the missing jumps. Args: demo (qwd path, Windows or WSL), map, name (default demo stem), graph (overlay name or path to diff against; default <map>-graph.json — run graph_dump first for a live one), min_link_dist (default 96), player (slot; default demo's local player). Rule 11.2 safe: outputs carry placement/target values only.",
+        "schema": {"demo": "string", "map": "string", "name": "string",
+                   "graph": "string", "min_link_dist": "number", "player": "integer"},
+        "required": ["demo", "map"],
+        "fn": lambda a: core.demo_ingest(a["demo"], a["map"], a.get("name"),
+                                         a.get("graph"), float(a.get("min_link_dist", 96.0)),
+                                         a.get("player")),
+    },
+    "promote": {
+        "desc": "Promote a proven patch to production: writes patch + provenance + trial evidence into route-lab artifacts/nav-patches/ and drafts a hand-off for the orchestrator PR lane. Refuses without recorded trial evidence (trial() writes the ledger). Args: name (stored patch name), map.",
+        "schema": {"name": "string", "map": "string"},
+        "required": ["name", "map"],
+        "fn": lambda a: core.promote(a["name"], a["map"]),
+    },
     "graph_dump": {
         "desc": "Dump the live graph and install it as a Movement Lab overlay (<name>-graph.json). Args: map (string), seed [x,y,z] = any walkable point (crawl start), name (default 'fasttrack'). Returns the viewer URL.",
         "schema": {"map": "string", "seed": "array", "name": "string"},
