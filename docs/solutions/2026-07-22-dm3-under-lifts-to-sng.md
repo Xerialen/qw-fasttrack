@@ -48,7 +48,7 @@ förbjudna cvars=0). Baseline: `nopatch.jsonl` 0/10.
    flygbågen mot osatta mål): gain 12, entry (−220,637), switch 160,
    landing (−302,535).
 
-### Lager 2 — exekutorn (rex branch `focus-controller`, EJ pushad)
+### Lager 2 — exekutorn (rex branch `focus-controller`, pushad till `Xerialen/rtx` 2026-07-22)
 4. **sj_approach** (`205b9de`): Walk/Step-legs inom 16 legs före en
    SpeedJump får committed bhop, fartgrindad ≥RUN_UP_SPEED 280 (`90aef52`).
    16 är optimum — 24 kilar i trappsvängar (`625d4ba`).
@@ -103,8 +103,9 @@ förbjudna cvars=0). Baseline: `nopatch.jsonl` 0/10.
 
 ## Öppet / nästa beslut (ägarens)
 
-- Rex `focus-controller` ~21 lokala commits, 216 tester gröna — PUSH KRÄVER
-  ÄGAR-OK. Uppströmskandidater till nano: 43a471c, tombstone-unlink,
+- Rex `focus-controller` (~21 commits, 216 tester gröna) + `bsp-probe`
+  PUSHADE till fork `Xerialen/rtx` 2026-07-22 (ägar-OK; ingen PR skapad).
+  Kvarvarande beslut: uppströmskandidater till nano: 43a471c, tombstone-unlink,
   bb6bba1+07f6541, e610954, 05216ea, 766d515+99081ce.
 - Gap-stängning HELA demot: celler 4→0 ✅; hopp 27→5 kvar (3 = trolig ny
   kantremsa vid RA-hyllan, 2 = plantering snappade >80u fel). VARNING:

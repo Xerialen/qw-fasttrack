@@ -58,8 +58,9 @@ rutt och rutten vi just löste)."*
 4. **Trial-loop:** acceptanskommandot per rutt A-mall; vid varians —
    telemetri FÖRE tuning (`sjtrace`/`penalties`), och kolla VÄRLDEN
    (hissar/platar/dörrar längs rutten) före controllern.
-5. Botkodsändringar: rex branch `focus-controller` (EJ pushad, ~21 commits,
-   216 tester). Bygg vidare där; sol via codex för implementationspass
+5. Botkodsändringar: rex branch `focus-controller` (~21 commits, 216 tester;
+   pushad till fork `Xerialen/rtx` 2026-07-22 tillsammans med basen
+   `bsp-probe`). Bygg vidare där; sol via codex för implementationspass
    (exakt binär: C:\Users\benya\AppData\Roaming\npm\codex; sol skriver
    ibland till vault utanför scope — säg uttryckligen nej och kolla ändå).
 
@@ -89,6 +90,7 @@ rutt och rutten vi just löste)."*
 
 ## Öppna ägarbeslut som kan påverka dig
 
-- Rex-pushen (branch + 7 uppströmskandidater till nano).
+- Rex uppströms: branchen är pushad till forken (2026-07-22); kvar är
+  beslutet om de 7 uppströmskandidaterna till nano (PR eller ej).
 - Closure-patchens kurering (27 länkar, xersng-close.json).
 - PR-scope för RA-tunnel (route-lab spår 1, qw-ctf/rtx#6).
