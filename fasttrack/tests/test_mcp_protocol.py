@@ -19,6 +19,9 @@ class McpProtocolTests(unittest.TestCase):
             "server_up", "server_down", "server_status", "maps_list", "ctl",
             "patch_apply", "patch_clear", "trial", "demo_ingest", "promote", "graph_dump",
         })
+        trial = next(tool for tool in response["result"]["tools"] if tool["name"] == "trial")
+        self.assertTrue({"pass_time_s", "streak_target", "max_time_s", "attempts_cap"}
+                        <= set(trial["inputSchema"]["properties"]))
 
 
 if __name__ == "__main__":

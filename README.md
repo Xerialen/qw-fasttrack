@@ -16,7 +16,7 @@ som äger en egen rtx-experimentserver i WSL:
   `fasttrack-server` (Nice=19). Aldrig deckens eller orkestreringens portar.
 - Verktyg: `server_up(map)` / `server_down` / `server_status` / `maps_list` /
   `ctl(command)` (rå kontrollverb-passthrough) / `patch_apply(qw-nav-patch/1)` /
-  `patch_clear` / `trial(start, target, attempts)` / `graph_dump(map, seed)`.
+  `patch_clear` / `trial(start, target, ...)` / `graph_dump(map, seed)`.
 - **Auto-replant:** aktiv patch sparas och återplanteras automatiskt vid varje
   `server_up` (planterade länkar dör vid map-restart — nu osynligt).
 - `graph_dump` installerar live-grafen som Movement Lab-overlay och
@@ -34,7 +34,12 @@ som äger en egen rtx-experimentserver i WSL:
   Cell-diffen är validerad mot känd sanning (xersng.qwd flaggar exakt den
   omeshade z=163-hyllan). Hopp-diffen är strikt — den kräver en direkt länk
   mellan ändpunkterna, så bunnyhops längs gåbart golv överflaggas som saknade.
-- **`trial`** skriver nu ett bevisregister (jsonl per aktiv patch).
+- **Trial v2** stoppar/håller botten, teleporterar och verifierar origin inom
+  24u, tar `t0` direkt före `goto`-skrivningen och mäter första mottagna
+  15 Hz-statusposition i `arrive_box`. `pass_time_s`, `streak_target` (5),
+  `max_time_s` (8) och `attempts_cap` (30) ger konsekutiv streak-gate; fail
+  nollställer streaken. JSONL-ledgern bär box/tidsgränser, graf-/patch-SHA,
+  matchtag och readback av de tre förbjudna cvarerna plus `rtx_bot_bhop`.
 - **`promote(name, map)`** — experiment -> produktion i ett kommando: vägrar
   utan trial-bevis, skriver patch + proveniens + bevis till
   `route-lab/artifacts/nav-patches/` och utkastar hand-off för orkestratorns
@@ -61,6 +66,14 @@ försök, dumpar grafen).
   element highlightas under spelarens rörelse; allt meshen SAKNAR glöder
   pulserande RÖTT med exakt geometri (ogrundade markpunkter, länklösa
   traverseringar) — samma diff som `demo_ingest`, som ger patchen.
+- Replayservern har en ensam `playing|paused|stopped|finished`-koordinator.
+  Textkommandon är `{"cmd":"play|pause|stop"}` och varje frame bär
+  `playback.state/t`. Varje klient har en egen writer och en en-slots
+  latest-frame-kö, så churn eller en klient som inte läser inte blockerar
+  övriga handshakes/frames. Producenter utan `playback` är fortsatt giltiga.
+- Offlinevägen totalsorterar samples (även lika timestamps), dedup-celler och
+  hopp. `build_timeline` + `missing_spec` verifieras över olika
+  `PYTHONHASHSEED` med hash av hela det kanoniska objektet.
 - Missing-ground använder ett fps-oberoende 0,10 s ensidigt stabilitetsfönster
   med QWD-veton för apex-vändpunkter och vertikala steg in i en närliggande
   landningsplatå. Livebryggan kräver tre konsekutiva unresolved-ticks med

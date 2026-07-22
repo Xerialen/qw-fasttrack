@@ -36,6 +36,12 @@ CELL_MATCH_Z = 40.0
 LINK_MATCH = 64.0        # live-link endpoint tolerance around a required jump
 
 
+def sample_sort_key(sample: tuple) -> tuple:
+    """Total ordering for demo samples, including equal-time parser output."""
+    return (float(sample[0]), float(sample[1]), float(sample[2]), float(sample[3]),
+            float(sample[4]) if sample[4] is not None else -math.inf)
+
+
 def load_samples(demo_path: str, player: int | None = None) -> list[tuple]:
     """[(t, x, y, z, speed_xy|None), ...] for one player, time-sorted."""
     parsed = qwd_dump.parse_demo(demo_path)
@@ -49,7 +55,7 @@ def load_samples(demo_path: str, player: int | None = None) -> list[tuple]:
         if info.velocity is not None:
             speed = math.hypot(info.velocity[0], info.velocity[1])
         out.append((info.time, *info.origin, speed))
-    out.sort(key=lambda s: s[0])
+    out.sort(key=sample_sort_key)
     if not out:
         raise ValueError(f"no playerinfo samples for player slot {slot}")
     return out
@@ -129,6 +135,7 @@ def _point_before(samples: list[tuple], i: int, mask: list[bool], back_s: float)
 
 def extract(samples: list[tuple], min_link_dist: float = 96.0) -> dict:
     """Required cells (clustered ground points) + deduped jump events."""
+    samples = sorted(samples, key=sample_sort_key)
     mask = grounded_mask(samples)
 
     cells: dict[tuple, list] = {}
@@ -141,7 +148,11 @@ def extract(samples: list[tuple], min_link_dist: float = 96.0) -> dict:
         acc[1] += s[1]
         acc[2] += s[2]
         acc[3] += s[3]
-    cell_points = {k: (a[1] / a[0], a[2] / a[0], a[3] / a[0]) for k, a in cells.items()}
+    cell_points = {
+        key: (cells[key][1] / cells[key][0], cells[key][2] / cells[key][0],
+              cells[key][3] / cells[key][0])
+        for key in sorted(cells)
+    }
 
     jumps: dict[tuple, dict] = {}
     i, n = 0, len(samples)
@@ -169,10 +180,11 @@ def extract(samples: list[tuple], min_link_dist: float = 96.0) -> dict:
         ev["count"] += 1
         ev["speeds"].append(round(_speed_at(samples, start - 1), 1))
 
-    for ev in jumps.values():
+    for key in sorted(jumps):
+        ev = jumps[key]
         speeds = sorted(ev.pop("speeds"))
         ev["speed_median"] = speeds[len(speeds) // 2]
-    return {"cells": cell_points, "jumps": list(jumps.values()),
+    return {"cells": cell_points, "jumps": [jumps[key] for key in sorted(jumps)],
             "grounded_samples": sum(mask), "samples": len(samples)}
 
 
@@ -197,7 +209,10 @@ def diff_vs_graph(extracted: dict, graph: dict) -> dict:
     def near(a, b, tol):
         return math.hypot(a[0] - b[0], a[1] - b[1]) <= tol and abs(a[2] - b[2]) <= CELL_MATCH_Z
 
-    cells_missing = [p for p in extracted["cells"].values() if not cell_covered(p)]
+    cells_missing = sorted(
+        (p for p in extracted["cells"].values() if not cell_covered(p)),
+        key=lambda point: tuple(float(value) for value in point),
+    )
     for jump in extracted["jumps"]:
         jump["covered"] = any(
             near(live_cells[l[0]], jump["takeoff"], LINK_MATCH)
@@ -213,8 +228,9 @@ def diff_vs_graph(extracted: dict, graph: dict) -> dict:
 def to_overlay(extracted: dict, map_name: str) -> dict:
     """qw-nav-graph/1 doc of the DEMO-required mesh, viewable as an overlay.
     Covered jumps render as Jump, missing ones as SpeedJump (distinct color)."""
-    points = list(extracted["cells"].values())
-    index = {k: i for i, k in enumerate(extracted["cells"])}
+    ordered_keys = sorted(extracted["cells"])
+    points = [extracted["cells"][key] for key in ordered_keys]
+    index = {key: i for i, key in enumerate(ordered_keys)}
 
     def nearest_idx(p):
         key = (math.floor(p[0] / GRID), math.floor(p[1] / GRID), math.floor(p[2] / GRID))

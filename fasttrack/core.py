@@ -7,6 +7,8 @@ forbidden cvars (permanent lab ban). Runs inside WSL (systemd --user).
 from __future__ import annotations
 
 import json
+import hashlib
+import math
 import os
 import shutil
 import socket
@@ -16,6 +18,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Callable
 
 # Own port block — never the deck's (8765/8767) or the orchestration's
 # (27504/06/08/16/21) ports. Control = game + 450 by lab convention.
@@ -29,6 +32,7 @@ REPLAY_WS_PORT = 8095
 RUNTIME = Path.home() / ".local" / "share" / "qw-fasttrack" / "runtime"
 STATE_DIR = Path.home() / ".local" / "share" / "qw-fasttrack"
 ACTIVE_PATCH = STATE_DIR / "active-patch.json"
+ACTIVE_GRAPH = STATE_DIR / "active-graph.json"
 PATCHES_DIR = STATE_DIR / "patches"
 EVIDENCE_DIR = STATE_DIR / "evidence"
 LIVE_STATE = STATE_DIR / "live-bridge.json"
@@ -166,9 +170,12 @@ class Control:
         line, self._buf = self._buf.split(b"\n", 1)
         return json.loads(line.decode("utf-8", "replace"))
 
-    def request(self, verb_and_args: str, timeout: float = 15.0) -> dict:
+    def request(self, verb_and_args: str, timeout: float = 15.0,
+                before_send: Callable[[], None] | None = None) -> dict:
         rid = self._next_id
         self._next_id += 1
+        if before_send is not None:
+            before_send()
         self._socket.sendall(f"{rid} {verb_and_args}\n".encode("ascii"))
         deadline = time.monotonic() + timeout
         while True:
@@ -371,49 +378,192 @@ def patch_clear() -> dict:
     return {"cleared": existed}
 
 
+TRIAL_POLL_HZ = 15.0
+TRIAL_CVARS = (
+    "rtx_bot_ledgecap", "rtx_walljump", "rtx_doublejump", "rtx_bot_bhop",
+)
+
+
+def _trial_bot(status: dict, bot: int) -> dict | None:
+    return next((entry for entry in status.get("bots", [])
+                 if int(entry.get("ent", -1)) == bot and entry.get("alive")), None)
+
+
+def _trial_origin(status: dict, bot: int) -> list[float] | None:
+    entry = _trial_bot(status, bot)
+    origin = entry.get("origin") if entry is not None else None
+    if not isinstance(origin, list) or len(origin) != 3:
+        return None
+    try:
+        return [float(value) for value in origin]
+    except (TypeError, ValueError):
+        return None
+
+
+def _inside_box(position: list[float], box: list[float]) -> bool:
+    return (len(box) == 6
+            and box[0] <= position[0] <= box[3]
+            and box[1] <= position[1] <= box[4]
+            and box[2] <= position[2] <= box[5])
+
+
+def _trial_provenance(control: Control, status: dict, arrive_box: list[float] | None,
+                      max_time_s: float, pass_time_s: float | None,
+                      streak_target: int | None) -> dict:
+    readback = {}
+    for name in TRIAL_CVARS:
+        data = control.request(f"get {name}")["data"]
+        readback[name] = {
+            "value": data.get("value"),
+            "string": data.get("string"),
+            "absent": data.get("string", "") == "",
+        }
+    matchtag = status.get("matchtag")
+    if matchtag is None:
+        data = control.request("get matchtag")["data"]
+        matchtag = data.get("string")
+    patch_sha = (hashlib.sha256(ACTIVE_PATCH.read_bytes()).hexdigest()
+                 if ACTIVE_PATCH.exists() else None)
+    graph_sha = status.get("graph_sha256") or status.get("graph_sha")
+    if graph_sha is None:
+        try:
+            active_graph = json.loads(ACTIVE_GRAPH.read_text(encoding="utf-8"))
+            # The active patch intentionally changes live link counts; its
+            # separate SHA composes with this baseline graph fingerprint.
+            if active_graph.get("map") == status.get("map"):
+                graph_sha = active_graph["sha256"]
+        except (OSError, KeyError, json.JSONDecodeError):
+            graph_sha = None
+    return {
+        "arrive_box": arrive_box,
+        "max_time_s": max_time_s,
+        "pass_time_s": pass_time_s,
+        "streak_target": streak_target,
+        "poll_hz": TRIAL_POLL_HZ,
+        "measurement_jitter_ms": round(1000.0 / TRIAL_POLL_HZ),
+        "graph_sha": graph_sha,
+        "patch_sha": patch_sha,
+        "matchtag": matchtag,
+        "cvar_readback": readback,
+    }
+
+
 def trial(start: list[float], target: list[float], attempts: int = 20,
           bot: int | None = None, settle_s: float = 0.6, timeout_s: float = 20.0,
-          arrive_box: list[float] | None = None) -> dict:
-    """Generic teleport->goto loop, map-agnostic. Success = `arrived` event
-    (or final traj sample inside arrive_box [x0,y0,z0,x1,y1,z1] if given)."""
+          arrive_box: list[float] | None = None, *, pass_time_s: float | None = None,
+          streak_target: int | None = None, max_time_s: float | None = None,
+          attempts_cap: int | None = None) -> dict:
+    """Measure teleport->goto attempts from received 15 Hz status positions.
+
+    Supplying any v2-only argument enables streak mode (defaults: five passes,
+    eight seconds, 30 attempts). Calls using only the old arguments retain the
+    old fixed-attempt shape and optional-arrive-box requirement.
+    """
+    if len(start) != 3 or len(target) != 3:
+        raise ValueError("start and target must each contain three coordinates")
+    if arrive_box is not None and len(arrive_box) != 6:
+        raise ValueError("arrive_box must contain six coordinates")
+    v2 = any(value is not None for value in
+             (pass_time_s, streak_target, max_time_s, attempts_cap))
+    if v2 and arrive_box is None:
+        raise ValueError("Trial v2 requires arrive_box; terminal events are evidence only")
+    effective_target = (5 if streak_target is None else int(streak_target)) if v2 else None
+    effective_max = 8.0 if v2 and max_time_s is None else float(
+        timeout_s if max_time_s is None else max_time_s)
+    cap = (30 if attempts_cap is None else int(attempts_cap)) if v2 else int(attempts)
+    if effective_target is not None and effective_target < 1:
+        raise ValueError("streak_target must be at least 1")
+    if pass_time_s is not None and pass_time_s <= 0:
+        raise ValueError("pass_time_s must be positive")
+    if cap < 1 or effective_max <= 0:
+        raise ValueError("attempts_cap and max_time_s must be positive")
+
     c = Control()
     try:
+        status = c.request("status")["data"]
         if bot is None:
-            status = c.request("status")["data"]
             alive = [b for b in status.get("bots", []) if b.get("alive")]
             if not alive:
                 raise RuntimeError("no live bot")
             bot = int(alive[0]["ent"])
+        provenance = _trial_provenance(
+            c, status, arrive_box, effective_max, pass_time_s, effective_target)
+        if v2 and provenance["graph_sha"] is None:
+            raise RuntimeError(
+                "Trial v2 requires graph provenance; run graph_dump for the active map first")
         rows = []
-        for i in range(attempts):
+        streak = 0
+        streak_max = 0
+        for i in range(cap):
+            c.request(f"stop {bot}")
+            c.request(f"hold {bot}")
             c.request(f"teleport {bot} {start[0]:g} {start[1]:g} {start[2]:g}")
             time.sleep(settle_s)
+            setup_status = c.request("status")["data"]
+            setup_origin = _trial_origin(setup_status, bot)
+            setup_error = (math.dist(start, setup_origin)
+                           if setup_origin is not None else math.inf)
             c.events.clear()
-            c.request(f"goto {bot} {target[0]:g} {target[1]:g} {target[2]:g}")
-            ev = c.wait_event(("arrived", "goto_stall"), timeout=timeout_s)
-            outcome, final = "timeout", None
-            if ev is not None:
-                traj = ev.get("traj") or []
-                final = traj[-1] if traj else None
-                if ev.get("ev") == "arrived":
-                    outcome = "arrived"
-                elif final and arrive_box and len(final) >= 4 and (
-                        arrive_box[0] <= final[1] <= arrive_box[3] and
-                        arrive_box[1] <= final[2] <= arrive_box[4] and
-                        arrive_box[2] <= final[3] <= arrive_box[5]):
-                    outcome = "stall_in_box"
-                else:
-                    outcome = "stall"
-            rows.append({"attempt": i + 1, "outcome": outcome,
-                         "t": (ev or {}).get("t"), "dist": (ev or {}).get("dist"),
-                         "final": final})
-        ok = sum(1 for r in rows if r["outcome"] in ("arrived", "stall_in_box"))
-        result = {"bot": bot, "attempts": attempts, "ok": ok, "rows": rows}
+            elapsed = None
+            box_entry_pos = None
+            terminal_events = []
+            if setup_error > 24.0:
+                outcome = "setup_failed"
+            else:
+                sent = [0.0]
+                c.request(
+                    f"goto {bot} {target[0]:g} {target[1]:g} {target[2]:g}",
+                    before_send=lambda: sent.__setitem__(0, time.monotonic()),
+                )
+                deadline = sent[0] + effective_max
+                outcome = "timeout"
+                while time.monotonic() < deadline:
+                    poll_started = time.monotonic()
+                    try:
+                        poll_status = c.request(
+                            "status", timeout=max(
+                                0.05, min(2.0, deadline - poll_started)))["data"]
+                    except ControlError:
+                        break
+                    received = time.monotonic()
+                    position = _trial_origin(poll_status, bot)
+                    while c.events:
+                        event = c.events.pop(0)
+                        if event.get("ev") in ("arrived", "goto_stall"):
+                            terminal_events.append({key: event.get(key)
+                                                    for key in ("ev", "t", "dist")})
+                    if arrive_box is not None and position is not None and _inside_box(position, arrive_box):
+                        elapsed = received - sent[0]
+                        box_entry_pos = position
+                        outcome = ("passed" if pass_time_s is None or elapsed <= pass_time_s
+                                   else "over_time")
+                        break
+                    if not v2 and arrive_box is None and terminal_events:
+                        # Compatibility path: old callers did not require a box.
+                        outcome = ("passed" if terminal_events[-1]["ev"] == "arrived" else "stall")
+                        break
+                    time.sleep(max(0.0, 1.0 / TRIAL_POLL_HZ - (time.monotonic() - poll_started)))
+            attempt_passed = outcome == "passed"
+            streak = streak + 1 if attempt_passed else 0
+            streak_max = max(streak_max, streak)
+            rows.append({
+                "attempt": i + 1, "outcome": outcome, "elapsed": elapsed,
+                "box_entry_pos": box_entry_pos, "setup_origin": setup_origin,
+                "setup_error": None if not math.isfinite(setup_error) else setup_error,
+                "terminal_events": terminal_events, "streak": streak,
+            })
+            if effective_target is not None and streak >= effective_target:
+                break
+        ok = sum(1 for row in rows if row["outcome"] == "passed")
+        passed = streak >= effective_target if effective_target is not None else ok > 0
+        result = {"bot": bot, "attempts": len(rows), "attempts_cap": cap, "ok": ok,
+                  "rows": rows, "streak_max": streak_max, "passed": passed,
+                  "provenance": provenance}
         # Evidence ledger keyed by the active patch: promote() refuses without it.
         EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
         with (EVIDENCE_DIR / f"{_active_patch_name()}.jsonl").open("a", encoding="utf-8") as fh:
             fh.write(json.dumps({"ts": time.time(), "start": start, "target": target,
-                                 **result}) + "\n")
+                                 "provenance": provenance, **result}) + "\n")
         return result
     finally:
         c.close()
@@ -428,7 +578,16 @@ def graph_dump(map: str, seed: list[float], out_name: str = "fasttrack") -> dict
     out = VIEWER_OVERLAYS / f"{out_name}-graph.json"
     _sh("python3", str(DUMP_LIVE_GRAPH), "--port", str(CONTROL_PORT),
         "--map", map, "--seed", *(f"{x:g}" for x in seed), "--out", str(out))
-    return {"out": str(out), "viewer": f"http://127.0.0.1:8088/?graph={out_name}"}
+    graph_bytes = out.read_bytes()
+    graph = json.loads(graph_bytes)
+    graph_sha = hashlib.sha256(graph_bytes).hexdigest()
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    ACTIVE_GRAPH.write_text(json.dumps({
+        "map": map, "name": out_name, "path": str(out), "sha256": graph_sha,
+        "cells": len(graph.get("cells") or []), "links": len(graph.get("links") or []),
+    }, separators=(",", ":")), encoding="utf-8")
+    return {"out": str(out), "graph_sha": graph_sha,
+            "viewer": f"http://127.0.0.1:8088/?graph={out_name}"}
 
 
 def _safe_overlay_name(name: str) -> bool:

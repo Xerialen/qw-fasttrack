@@ -19,22 +19,28 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import bisect
 import hashlib
 import json
+import logging
 import math
+import struct
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import demo_mesh  # noqa: E402
-from live_bridge import Attribution, GraphContract, _read_ws_frame, _ws_frame  # noqa: E402
+from live_bridge import Attribution, GraphContract, _ws_frame  # noqa: E402
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 TICK_HZ = 20.0
 CELL_XY = 24.0
 CELL_Z = 40.0
 MISS_SNAP = 32.0
+MAX_CLIENT_MESSAGE = 1024
+LOG = logging.getLogger("fasttrack.demo_replay")
 
 
 class GraphMatcher:
@@ -64,7 +70,9 @@ class GraphMatcher:
 
 def build_timeline(demo_path: str, graph: GraphContract, player: int | None = None) -> list[dict]:
     """Precompute per-sample playback state: pos, cell, used/missing sets."""
-    samples = demo_mesh.load_samples(demo_path, player)
+    # This public boundary also accepts alternate/test loaders; do not inherit
+    # their iteration order even though the standard loader already sorts.
+    samples = sorted(demo_mesh.load_samples(demo_path, player), key=demo_mesh.sample_sort_key)
     mask = demo_mesh.grounded_mask(samples)
     matcher = GraphMatcher(graph)
     attribution = Attribution()
@@ -117,6 +125,90 @@ def build_timeline(demo_path: str, graph: GraphContract, player: int | None = No
     return timeline
 
 
+class PlaybackCoordinator:
+    """Single owner of the replay playhead, clock offset, and state."""
+
+    VALID_COMMANDS = {"play", "pause", "stop"}
+
+    def __init__(self, timeline: list[dict], speed: float, loop_playback: bool,
+                 now: float | None = None):
+        if not timeline:
+            raise ValueError("timeline must not be empty")
+        if speed <= 0:
+            raise ValueError("speed must be positive")
+        self.timeline = timeline
+        self.times = [float(frame["t"]) for frame in timeline]
+        self.speed = speed
+        self.loop_playback = loop_playback
+        self.state = "playing"
+        self.index = 0
+        self.t = 0.0
+        self.attempt_id = 1
+        self.clock_offset = time.monotonic() if now is None else now
+
+    def _restart(self, now: float, *, increment_attempt: bool) -> None:
+        if increment_attempt:
+            self.attempt_id += 1
+        self.state = "playing"
+        self.index = 0
+        self.t = 0.0
+        self.clock_offset = now
+
+    def advance(self, now: float | None = None) -> None:
+        now = time.monotonic() if now is None else now
+        if self.state != "playing":
+            return
+        duration = self.times[-1]
+        candidate = max(0.0, (now - self.clock_offset) * self.speed)
+        if candidate >= duration:
+            if self.loop_playback and duration > 0:
+                loops = max(1, int(candidate // duration))
+                self.attempt_id += loops
+                candidate %= duration
+                self.clock_offset = now - candidate / self.speed
+            else:
+                self.t = duration
+                self.index = len(self.timeline) - 1
+                self.state = "finished"
+                return
+        self.t = candidate
+        self.index = max(0, bisect.bisect_right(self.times, self.t) - 1)
+
+    def command(self, command: str, now: float | None = None) -> None:
+        if command not in self.VALID_COMMANDS:
+            raise ValueError(f"unknown playback command {command!r}")
+        now = time.monotonic() if now is None else now
+        self.advance(now)
+        if command == "pause":
+            if self.state == "playing":
+                self.state = "paused"
+        elif command == "stop":
+            self.state = "stopped"
+            self.index = 0
+            self.t = 0.0
+            self.attempt_id += 1
+            self.clock_offset = now
+        elif self.state == "paused":
+            self.state = "playing"
+            self.clock_offset = now - self.t / self.speed
+        elif self.state in ("stopped", "finished"):
+            self._restart(now, increment_attempt=self.state == "finished")
+
+    def snapshot(self) -> tuple[dict, dict]:
+        state = self.timeline[self.index]
+        if self.state == "stopped":
+            state = {**state, "used": {"cells": [], "links": []},
+                     "missing": {"cells": [], "links": []}}
+        return state, {"state": self.state, "t": self.t}
+
+
+@dataclass(eq=False)
+class ReplayClient:
+    writer: asyncio.StreamWriter
+    outgoing: asyncio.Queue[bytes]
+    writer_task: asyncio.Task | None = None
+
+
 class ReplayServer:
     def __init__(self, graph: GraphContract, timeline: list[dict],
                  ws_port: int, speed: float, loop_playback: bool):
@@ -125,8 +217,69 @@ class ReplayServer:
         self.ws_port = ws_port
         self.speed = speed
         self.loop_playback = loop_playback
-        self.clients: set[asyncio.StreamWriter] = set()
+        self.playback = PlaybackCoordinator(timeline, speed, loop_playback)
+        self.clients: set[ReplayClient] = set()
+        self.commands: asyncio.Queue[dict] = asyncio.Queue()
         self.seq = 0
+        self._server: asyncio.Server | None = None
+        self._tick_task: asyncio.Task | None = None
+        self._command_task: asyncio.Task | None = None
+        self._closed = asyncio.Event()
+
+    @staticmethod
+    async def _read_client_frame(
+            reader: asyncio.StreamReader) -> tuple[int, bytes | None, int]:
+        first, second = await reader.readexactly(2)
+        opcode = first & 0x0F
+        masked = bool(second & 0x80)
+        length = second & 0x7F
+        if length == 126:
+            length = struct.unpack("!H", await reader.readexactly(2))[0]
+        elif length == 127:
+            length = struct.unpack("!Q", await reader.readexactly(8))[0]
+        mask = await reader.readexactly(4) if masked else b""
+        if length > MAX_CLIENT_MESSAGE:
+            remaining = length
+            while remaining:
+                chunk = await reader.readexactly(min(remaining, 65536))
+                remaining -= len(chunk)
+            return opcode, None, length
+        payload = await reader.readexactly(length)
+        if masked:
+            payload = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
+        return opcode, payload, length
+
+    @staticmethod
+    def _enqueue(client: ReplayClient, encoded: bytes) -> None:
+        if client.outgoing.full():
+            try:
+                client.outgoing.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+        client.outgoing.put_nowait(encoded)
+
+    async def _writer(self, client: ReplayClient) -> None:
+        try:
+            while True:
+                encoded = await client.outgoing.get()
+                client.writer.write(encoded)
+                await client.writer.drain()
+        except (asyncio.CancelledError, ConnectionError, OSError):
+            pass
+        finally:
+            self.clients.discard(client)
+            client.writer.close()
+
+    async def _disconnect(self, client: ReplayClient) -> None:
+        self.clients.discard(client)
+        if client.writer_task is not None and client.writer_task is not asyncio.current_task():
+            client.writer_task.cancel()
+            await asyncio.gather(client.writer_task, return_exceptions=True)
+        client.writer.close()
+        try:
+            await asyncio.wait_for(client.writer.wait_closed(), 1.0)
+        except (OSError, TimeoutError):
+            pass
 
     async def _ws_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
@@ -144,31 +297,46 @@ class ReplayServer:
                           "Upgrade: websocket\r\nConnection: Upgrade\r\n"
                           f"Sec-WebSocket-Accept: {accept}\r\n\r\n").encode("ascii"))
             await writer.drain()
-            self.clients.add(writer)
+            client = ReplayClient(writer, asyncio.Queue(maxsize=1))
+            client.writer_task = asyncio.create_task(self._writer(client), name="replay-client-writer")
+            self.clients.add(client)
             while True:
-                opcode, payload = await _read_ws_frame(reader)
+                opcode, payload, length = await self._read_client_frame(reader)
+                if payload is None:
+                    LOG.warning("ignored oversized websocket message bytes=%d", length)
+                    continue
                 if opcode == 0x8:
                     break
                 if opcode == 0x9:
-                    writer.write(_ws_frame(payload, opcode=0xA))
-                    await writer.drain()
-        except (asyncio.IncompleteReadError, TimeoutError, ValueError, OSError):
-            pass
+                    self._enqueue(client, _ws_frame(payload, opcode=0xA))
+                    continue
+                if opcode != 0x1:
+                    LOG.warning("ignored non-text websocket message opcode=%s", opcode)
+                    continue
+                try:
+                    message = json.loads(payload.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    LOG.warning("ignored malformed websocket command")
+                    continue
+                if (not isinstance(message, dict)
+                        or message.get("cmd") not in PlaybackCoordinator.VALID_COMMANDS):
+                    LOG.warning("ignored unknown websocket command: %r", message)
+                    continue
+                await self.commands.put({"cmd": message["cmd"]})
+        except (asyncio.IncompleteReadError, TimeoutError, ValueError, OSError) as exc:
+            LOG.debug("websocket client disconnected: %s", exc)
         finally:
-            self.clients.discard(writer)
-            writer.close()
+            if "client" in locals():
+                await self._disconnect(client)
+            else:
+                writer.close()
 
     async def _broadcast(self, frame: dict) -> None:
         encoded = _ws_frame(json.dumps(frame, separators=(",", ":")).encode("utf-8"))
-        for writer in tuple(self.clients):
-            try:
-                writer.write(encoded)
-                await writer.drain()
-            except (ConnectionError, OSError):
-                self.clients.discard(writer)
-                writer.close()
+        for client in tuple(self.clients):
+            self._enqueue(client, encoded)
 
-    def _frame(self, state: dict, attempt: int) -> dict:
+    def _frame(self, state: dict, playback: dict, attempt: int) -> dict:
         self.seq += 1
         return {
             "schema": "qw-live-frame/1",
@@ -177,13 +345,53 @@ class ReplayServer:
             "graph": {"name": self.graph.name, "cells": len(self.graph.cells),
                       "links": len(self.graph.links), "sha256": self.graph.sha256},
             "attempt_id": attempt,
+            "playback": playback,
             "bots": [{"ent": 0, "pos": state["pos"], "speed": state["speed"],
                       "cell_id": state["cell_id"], "used": state["used"],
                       "missing": state["missing"]}],
         }
 
+    async def _command_loop(self) -> None:
+        try:
+            while True:
+                message = await self.commands.get()
+                self.playback.command(message["cmd"])
+        except asyncio.CancelledError:
+            pass
+
+    async def _tick_loop(self) -> None:
+        try:
+            while True:
+                started = time.monotonic()
+                self.playback.advance(started)
+                state, playback = self.playback.snapshot()
+                await self._broadcast(self._frame(state, playback, self.playback.attempt_id))
+                await asyncio.sleep(max(0.0, 1.0 / TICK_HZ - (time.monotonic() - started)))
+        except asyncio.CancelledError:
+            pass
+
+    async def start(self) -> None:
+        self._server = await asyncio.start_server(self._ws_client, "127.0.0.1", self.ws_port)
+        self.ws_port = int(self._server.sockets[0].getsockname()[1])
+        self.playback.clock_offset = time.monotonic() - self.playback.t / self.playback.speed
+        self._command_task = asyncio.create_task(self._command_loop(), name="replay-commands")
+        self._tick_task = asyncio.create_task(self._tick_loop(), name="replay-ticks")
+
+    async def close(self) -> None:
+        for task in (self._tick_task, self._command_task):
+            if task is not None:
+                task.cancel()
+        await asyncio.gather(*(task for task in (self._tick_task, self._command_task)
+                               if task is not None), return_exceptions=True)
+        if self._server is not None:
+            self._server.close()
+            await self._server.wait_closed()
+        await asyncio.gather(*(self._disconnect(client) for client in tuple(self.clients)),
+                             return_exceptions=True)
+        self._closed.set()
+
     async def run(self) -> None:
-        server = await asyncio.start_server(self._ws_client, "127.0.0.1", self.ws_port)
+        await self.start()
         final = self.timeline[-1]
         summary = {"missing_cells": len(final["missing"]["cells"]),
                    "missing_links": len(final["missing"]["links"]),
@@ -191,28 +399,10 @@ class ReplayServer:
                    "used_links": len(final["used"]["links"])}
         print(f"replay ready: ws={self.ws_port} duration={final['t']:.1f}s "
               f"{json.dumps(summary)}", flush=True)
-        attempt = 0
         try:
-            while True:
-                attempt += 1
-                start = time.monotonic()
-                index = 0
-                while index < len(self.timeline):
-                    elapsed = (time.monotonic() - start) * self.speed
-                    while index < len(self.timeline) and self.timeline[index]["t"] <= elapsed:
-                        index += 1
-                    state = self.timeline[min(index, len(self.timeline)) - 1]
-                    await self._broadcast(self._frame(state, attempt))
-                    await asyncio.sleep(1.0 / TICK_HZ)
-                if not self.loop_playback:
-                    break
-            # Hold the final state so the missing layer stays visible.
-            while True:
-                await self._broadcast(self._frame(self.timeline[-1], attempt))
-                await asyncio.sleep(1.0 / TICK_HZ)
+            await self._closed.wait()
         finally:
-            server.close()
-            await server.wait_closed()
+            await self.close()
 
 
 def main() -> int:
@@ -226,6 +416,7 @@ def main() -> int:
     parser.add_argument("--summary-only", action="store_true",
                         help="print the coverage summary and exit (no WS)")
     args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     graph = GraphContract.load(args.graph)
     timeline = build_timeline(args.demo, graph, args.player)

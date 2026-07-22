@@ -61,3 +61,33 @@ Visual evidence is
 headed WebGPU browser from
 `http://127.0.0.1:8090/?graph=fasttrack&live=8096`. The replay service remains
 active as `fasttrack-replay-final` at speed 8, no loop.
+
+## Toolbox v2 Phase 1 (2026-07-22)
+
+Owner-free validation runs inside the repository's documented WSL runtime:
+
+```text
+$ python3 -m unittest discover -s fasttrack/tests
+...................
+----------------------------------------------------------------------
+Ran 19 tests in 1.437s
+
+OK
+```
+
+The six Trial v2 tests mock the control channel and cover streak reset,
+timeout, setup failure beyond 24u, and receive-time elapsed measurement plus
+ledger provenance, mandatory `arrive_box`, and fail-closed graph provenance.
+Playback coverage exercises pause/resume without a clock
+jump, stop/restart/finished semantics, command parsing, malformed and >1 KB
+message logging, five connect-and-die clients plus one non-reading client, and
+a fresh client receiving a frame within one second. The compatibility seam
+accepts a frame with no `playback` field.
+
+The offline determinism test launches two subprocesses with
+`PYTHONHASHSEED=1` and `2`, runs `build_timeline` and a real `missing_spec`
+export, canonically serializes the complete timeline+spec object, and requires
+the SHA-256 hashes to match. No game server was started. A direct PowerShell
+invocation is not the supported runtime (`python3` there resolves to Windows
+Python and cannot resolve the documented WSL-only qwd/fixture paths); the same
+literal unittest command is green in Ubuntu-24.04.

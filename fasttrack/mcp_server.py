@@ -52,14 +52,21 @@ TOOLS = {
         "fn": lambda a: core.patch_clear(),
     },
     "trial": {
-        "desc": "Loop teleport->goto attempts and return per-attempt outcomes + summary. Map-agnostic: start/target are [x,y,z]. Optional arrive_box [x0,y0,z0,x1,y1,z1] counts stalls inside it as success.",
+        "desc": "Trial v2: stop+hold, teleport/verify, then measure first received 15 Hz status position inside arrive_box. Streak mode defaults to pass_time_s unset, streak_target 5, max_time_s 8, attempts_cap 30 when any v2 parameter is supplied; old calls remain fixed-attempt compatible.",
         "schema": {"start": "array", "target": "array", "attempts": "integer",
                    "bot": "integer", "settle_s": "number", "timeout_s": "number",
-                   "arrive_box": "array"},
+                   "arrive_box": "array", "pass_time_s": "number",
+                   "streak_target": "integer", "max_time_s": "number",
+                   "attempts_cap": "integer"},
         "required": ["start", "target"],
-        "fn": lambda a: core.trial(a["start"], a["target"], int(a.get("attempts", 20)),
-                                   a.get("bot"), float(a.get("settle_s", 0.6)),
-                                   float(a.get("timeout_s", 20.0)), a.get("arrive_box")),
+        "fn": lambda a: core.trial(
+            a["start"], a["target"], int(a.get("attempts", 20)), a.get("bot"),
+            float(a.get("settle_s", 0.6)), float(a.get("timeout_s", 20.0)),
+            a.get("arrive_box"), pass_time_s=(float(a["pass_time_s"])
+                                               if "pass_time_s" in a else None),
+            streak_target=(int(a["streak_target"]) if "streak_target" in a else None),
+            max_time_s=(float(a["max_time_s"]) if "max_time_s" in a else None),
+            attempts_cap=(int(a["attempts_cap"]) if "attempts_cap" in a else None)),
     },
     "demo_ingest": {
         "desc": "Demo -> required mesh: extract ground coverage + jump links a player's qwd needed, diff vs a qw-nav-graph/1 dump, install the demo-mesh as a viewer overlay and emit a ready qw-nav-patch/1 for the missing jumps. Args: demo (qwd path, Windows or WSL), map, name (default demo stem), graph (overlay name or path to diff against; default <map>-graph.json — run graph_dump first for a live one), min_link_dist (default 96), player (slot; default demo's local player). Rule 11.2 safe: outputs carry placement/target values only.",
