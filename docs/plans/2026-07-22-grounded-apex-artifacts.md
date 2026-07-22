@@ -1,6 +1,7 @@
 # Spec: eliminera apex-artefakter i missing-ground-detektionen
 
-**Status:** implementerad kandidat 2026-07-22; väntar oberoende review. Den
+**Status:** GODKÄND i oberoende review 2026-07-22 ~13:15 (Claude, granskningsdom
+sist i dokumentet). Den
 ursprungliga z=163,8-hypotesen och det ensidiga fönstrets fysikargument
 korrigerades mot faktisk QWD-data, se avsnitt 8.
 **Repo:** `qw-fasttrack` (`C:\Users\benya\projects\quakeworld\qw-fasttrack`, WSL-vy `/mnt/c/...`)
@@ -206,3 +207,24 @@ som z=99,8 över z=56, inte en yta. Att bevara det hade bevarat buggen.
   på 8096, speed 8, no-loop.
 
 Detta var implementationsvarv 1 med tre öppet redovisade self-corrections.
+
+## 9. Granskningsdom (Claude, oberoende review 2026-07-22)
+
+**GODKÄND.** Verifierat självständigt, inte via rapporten:
+
+- Testsviten 8/8 grön (körd av granskaren, `python3 -m unittest discover`).
+- Omexporterad artefakt verifierad: sha256 `82386b4f…` matchar §8.4; 4 celler
+  på z 40/56/120 — alla rimliga golvhöjder, inga apexhöjder.
+- Visuell verifiering i realbrowser mot färsk replay 8096: röda lager ligger
+  på ytor; kvarvarande luftkorsande röda linjer är saknade traversaler
+  (korrekt semantik).
+- Self-corrections i §8 (inkl. att granskarens egen z=163,8-hypotes föll) är
+  öppet redovisade och datagrundade — föredömligt.
+
+Två NYA fynd under granskningen, EJ blockerande för denna fix (förelåg i
+v1-koden), överförda till `2026-07-22-toolbox-v2.md` P0.3/P0.4:
+
+1. Replayserverns WS slutar svara på nya handshakes efter klient-churn
+   (reproducerat; färsk omstart svarar direkt).
+2. Determinism: två raka starter gav used_links 233 vs 226, missing_links
+   18 vs 20 (journalbevis) — trolig hash-randomiserad iterationsordning.
