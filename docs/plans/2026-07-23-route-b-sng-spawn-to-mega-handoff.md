@@ -88,6 +88,41 @@ rutt och rutten vi just löste)."*
   ännu en kantremsa vid RA-hyllan (landningar z=145,5).
 - Lifts-lärdomen: om periodisk varians uppstår — världen först.
 
+## LÄGE 2026-07-22 sen kväll: analys KLAR, mesh STÄNGD, exekutorn kvar
+
+Steg 1–3 i receptet är genomförda (samma session som skrev handoffen):
+
+- **Människoreferens:** rörelsestart +0,922, SNG +5,234, mega +7,909 →
+  **hela rutten 6,99 s (gräns 8,39)**, del 1 4,31 s, del 2 2,68 s.
+  Fartprofil: 440–491 genom gången/språnget; sänker till ~360 i hörnet.
+- **Gap-analys (färsk graf `routeb`):** 0 celler saknas; 4/5 hopp saknades.
+  "Hoppet" uppför trappan = bhop över nativa Step-länkar (inget att plantera).
+- **Kuraterade planteringar (LIVE + `patches/routeb-wip.json`, EJ i aktiva
+  patchen):** brosprånget from(−928,320) takeoff(−911,633) to(−710,845)
+  v460 (90° högercurl, människans flygbana); SNG-hoppet from(−525,675)
+  takeoff(−522,437) to(−522,251,176) v445 (runway SÖDER om sänkan);
+  trench-SJ som fallback (routern föredrar NATIV jump (−576,800)→(−544,672)
+  över sänkan y≈688–788/z84 — den nativa räcker).
+  **Routerns fullruttsplan är nu människans rutt exakt** (36 legs: Steps →
+  brosprång → hörn → nativ sänk-jump → SNG-SJ → avsats → nativ jump → mega).
+- **Regressionsvakt:** rutt A-streaken STÅR med allt planterat (5-streak,
+  3,63–3,69 s, 2026-07-22 ~23:30). Kuraterat = ingen förorening.
+- **KVAR — tre exekutorfel (frame-bevisade, alla botkod/focus-controller):**
+  1. **Hoppfas-varians vid brosprånget:** grundad vid linjen ⇒ perfekt lyft
+     (454–478); i hopbåge vid linjen ⇒ tidigt lyft från apex → gapfall.
+     Samma klass som trappserien — aktiv fasplanering (99081ce) täcker inte
+     platt runway före SJ.
+  2. **Het hörning efter landning:** 380–480 ups genom走 gånglegs skär
+     hörn → av plattformskanten (ledge-brake griper inte). Människan
+     saktar till ~360 där.
+  3. **Grop-livelock:** efter fall studsar boten mot vägg på stället i
+     10+ s utan recovery-repath (varje miss blir timeout i stället för
+     långsam återhämtning). Billigaste fixen med störst trial-effekt.
+  Fullrutt 0/8 över tre trialkonfigurationer; bästa observerade delsträckor
+  i pace med människan (spawn→språnglandning ~4,0 s vs människans 3,9).
+  focus-controller saknar dessutom mains drop-cert 408fb52 ("bhop look-ahead
+  off a drop") — merge av main är ägarbeslut (uttalat: SENARE, inte nu).
+
 ## Öppna ägarbeslut som kan påverka dig
 
 - Rex uppströms: branchen är pushad till forken (2026-07-22); kvar är
