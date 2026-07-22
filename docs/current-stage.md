@@ -1,15 +1,15 @@
 # Current Stage
 
-last-verified: 2026-07-21
+last-verified: 2026-07-22
 status: active
 maturity: stage-1-prototype
 
 ## Current goal
 
-Build fasttrack v1 live-viewer: show the bot moving on the map and navmesh in
-real time, with the navmesh elements used by the current attempt clearly
-highlighted. The implementation contract is
-`docs/plans/2026-07-21-v1-live-viewer.md`, including its final rev-3 rulings.
+Eliminate false airborne missing-ground glyphs from both offline QWD replay
+and the live bridge without losing real surface contacts. The implementation
+contract and measured correction are in
+`docs/plans/2026-07-22-grounded-apex-artifacts.md`.
 
 ## Why this matters
 
@@ -18,7 +18,8 @@ the bot, active cell, and attributed links in one live browser view.
 
 ## Next smallest useful step
 
-Complete T0-T6 in the v1 plan and preserve terminal and reviewer evidence.
+Obtain independent review of the grounded-apex fix and its regenerated
+`dm3-xersng-full-missing-spec.json` evidence.
 
 ## Active constraints
 
@@ -35,8 +36,10 @@ port, the route-lab main tree, or bot/engine code.
 
 ## Last known state
 
-The v0 server/control/MCP prototype exists. The live bridge, live viewer layer,
-and lifecycle tools are not yet implemented.
+Fasttrack v1 is implemented at `b4df138`: live bridge, viewer layer, demo
+replay, missing layer, and spec export exist. The grounded-apex candidate
+removes every measured xersng airborne cell glyph; the final replay has nine
+surface-level missing cells rather than 42 floating/ground-mixed cells.
 
 ## Required docs to update
 

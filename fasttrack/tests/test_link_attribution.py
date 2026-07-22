@@ -9,7 +9,12 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
-from live_bridge import Attribution, GraphContract, LiveBridge  # noqa: E402
+from live_bridge import (  # noqa: E402
+    Attribution,
+    GraphContract,
+    LiveBridge,
+    _next_unresolved_streak,
+)
 
 
 GRAPH = Path("/mnt/c/Users/benya/projects/quakeworld/route-lab-viewer-live/qw-nav-viewer/overlays/fasttrack-graph.json")
@@ -28,6 +33,25 @@ class LinkAttributionTests(unittest.TestCase):
         self.assertEqual(list(sorted(state.used_links)).count(planted), 1)
         state.reset()
         self.assertEqual(state.used_links, set())
+
+    def test_missing_ground_streak_requires_consecutive_z_stability(self):
+        streak = 0
+        prev_z = None
+        stamped = False
+        for z in (56.0, 56.0, 56.0):
+            streak = _next_unresolved_streak(streak, z, prev_z)
+            prev_z = z
+            stamped |= streak >= 3
+        self.assertTrue(stamped)
+
+        streak = 0
+        prev_z = None
+        stamped = False
+        for z in (100.0, 106.0, 109.0, 110.7, 109.0, 106.0):
+            streak = _next_unresolved_streak(streak, z, prev_z)
+            prev_z = z
+            stamped |= streak >= 3
+        self.assertFalse(stamped)
 
 
 class ProxyRoutingTests(unittest.IsolatedAsyncioTestCase):

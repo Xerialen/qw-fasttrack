@@ -61,6 +61,10 @@ försök, dumpar grafen).
   element highlightas under spelarens rörelse; allt meshen SAKNAR glöder
   pulserande RÖTT med exakt geometri (ogrundade markpunkter, länklösa
   traverseringar) — samma diff som `demo_ingest`, som ger patchen.
+- Missing-ground använder ett fps-oberoende 0,10 s ensidigt stabilitetsfönster
+  med QWD-veton för apex-vändpunkter och vertikala steg in i en närliggande
+  landningsplatå. Livebryggan kräver tre konsekutiva unresolved-ticks med
+  |Δz| < 2u. Därmed renderas röda cellglyfer på ytor i stället för i luften.
 - Kända begränsningar (klarspråk): länkattributionen är geometrisk med
   tolerans (80u) och kan missa/överflagga i täta områden; `used`-listor
   växer obegränsat per attempt (reset vid goto); bottens ruttval är dess

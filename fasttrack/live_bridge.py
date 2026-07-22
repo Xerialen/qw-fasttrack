@@ -24,10 +24,20 @@ from typing import Any
 
 
 LOG = logging.getLogger("fasttrack.live_bridge")
+MISSING_GROUND_DZ_TOL = 2.0
 STATE_FILE = Path.home() / ".local" / "share" / "qw-fasttrack" / "live-bridge.json"
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 TERMINAL_EVENTS = {"arrived", "goto_stall"}
 INTERNAL = object()
+
+
+def _next_unresolved_streak(streak: int, z: float, prev_z: float | None) -> int:
+    """Advance only while consecutive unresolved ticks stay vertically still."""
+    if prev_z is None:
+        return 1
+    if abs(z - prev_z) < MISSING_GROUND_DZ_TOL:
+        return streak + 1
+    return 0
 
 
 def _json_line(value: dict[str, Any]) -> bytes:
@@ -510,7 +520,8 @@ class LiveBridge:
             state = self.attribution.setdefault(ent, Attribution())
             aux = self._actor_aux.setdefault(
                 ent, {"last_ground_pos": None, "airborne_from": None,
-                      "airborne_point": None, "unresolved_streak": 0})
+                      "airborne_point": None, "unresolved_streak": 0,
+                      "prev_z": None})
             resolved_raw = await self._resolve_cell(position)
             if self.record_path is not None:
                 with self.record_path.open("a", encoding="utf-8") as fh:
@@ -541,15 +552,21 @@ class LiveBridge:
                 aux["last_ground_pos"] = list(position)
                 state.observe(resolved, time.monotonic(), self.graph)
             elif airborne:
+                aux["unresolved_streak"] = 0
                 if aux["airborne_from"] is None and state.last_cell is not None:
                     aux["airborne_from"] = state.last_cell
                     aux["airborne_point"] = aux["last_ground_pos"] or list(position)
             else:
                 # No cell at all here. Sustained -> the actor is standing on
-                # ground the mesh does not cover: a red missing cell.
-                aux["unresolved_streak"] += 1
+                # ground the mesh does not cover: a red missing cell. Require
+                # vertical stability so a ballistic arc over an unmeshed area
+                # cannot accumulate the same streak in mid-air.
+                aux["unresolved_streak"] = _next_unresolved_streak(
+                    aux["unresolved_streak"], position[2], aux["prev_z"]
+                )
                 if aux["unresolved_streak"] >= 3:
                     state.note_missing_ground(position)
+            aux["prev_z"] = position[2]
             cell_id = resolved if resolved is not None else state.last_cell
             bots_out.append(
                 {

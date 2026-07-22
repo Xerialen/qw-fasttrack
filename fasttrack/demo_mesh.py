@@ -26,7 +26,7 @@ sys.path.insert(0, str(QWD_TOOLS))
 import qwd_dump  # noqa: E402
 
 GRID = 32.0
-GROUND_WINDOW = 2        # samples each side for plateau detection
+GROUND_WINDOW_S = 0.10   # one-sided plateau window, independent of demo fps
 GROUND_Z_TOL = 1.0       # max z spread inside the window to count as grounded
 MIN_AIR_S = 0.15         # shorter airborne runs are stair steps, not jumps
 APPROACH_S = 0.5         # how far before takeoff the patch "from" point sits
@@ -56,14 +56,55 @@ def load_samples(demo_path: str, player: int | None = None) -> list[tuple]:
 
 
 def grounded_mask(samples: list[tuple]) -> list[bool]:
+    """Classify samples with stable time windows on either side.
+
+    One-sided windows preserve the final ground sample before takeoff and the
+    first one after landing. At a Quake jump apex, 0.10 s of gravity changes
+    z by 0.5 * 800 * 0.10^2 = 4 units, four times the plateau tolerance, so a
+    short low-velocity apex cannot masquerade as ground. Quantized QWD values
+    can make a side straddle the apex and return to the same height with less
+    than one unit of spread, so a stable side also rejects a pronounced peak
+    between two lower endpoints. A near-landing airborne sample can similarly
+    borrow a stable post-landing plateau, so its adjacent vertical step must
+    also be flat. A side needs at least one neighbour; an isolated sample is
+    not evidence of a surface.
+    """
+    def stable_side(values: list[float], *, current_at_start: bool) -> bool:
+        if len(values) < 2 or max(values) - min(values) >= GROUND_Z_TOL:
+            return False
+        adjacent_step = (
+            values[1] - values[0]
+            if current_at_start
+            else values[-1] - values[-2]
+        )
+        if abs(adjacent_step) >= GROUND_Z_TOL / 4.0:
+            return False
+        peak = max(values)
+        turn_margin = GROUND_Z_TOL / 2.0
+        return not (
+            peak - values[0] >= turn_margin
+            and peak - values[-1] >= turn_margin
+        )
+
+    times = [float(s[0]) for s in samples]
     z = [s[3] for s in samples]
     n = len(z)
     mask = []
+    backward = 0
+    forward = 0
     for i in range(n):
-        lo = max(0, i - GROUND_WINDOW)
-        hi = min(n, i + GROUND_WINDOW + 1)
-        window = z[lo:hi]
-        mask.append(max(window) - min(window) < GROUND_Z_TOL)
+        while times[i] - times[backward] > GROUND_WINDOW_S:
+            backward += 1
+        forward = max(forward, i + 1)
+        while forward < n and times[forward] - times[i] <= GROUND_WINDOW_S:
+            forward += 1
+
+        before = z[backward:i + 1]
+        after = z[i:forward]
+        mask.append(
+            stable_side(before, current_at_start=False)
+            or stable_side(after, current_at_start=True)
+        )
     return mask
 
 
