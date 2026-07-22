@@ -29,12 +29,17 @@ rutt och rutten vi just löste)."*
 
 ## Källdemon
 
-- **`C:\Users\benya\projects\quakeworld\data\owner-demos\xersngmega-20260720.qwd`**
-  — ägarens "sng mega demo", trolig primärkälla för BÅDA delarna.
-- `C:\nQuake\qw\matchinfo\demos\xersng.qwd` — rutt A-demot; ägaren går
-  fram och tillbaka och testar flera varianter, kan innehålla B-instanser.
-- Ägaren väljer instans (som för rutt A: han pekade ut start/slutpunkt) —
-  FRÅGA om instansval om det är tvetydigt, gissa inte.
+- **PRIMÄR: `C:\nQuake\qw\matchinfo\demos\xersngtomega1.qwd`** — inspelad
+  av ägaren 2026-07-22 22:47 SPECIFIKT för rutt B. Verifierad parse:
+  741 samples, EN ren instans på **9,6 s**, start (−880,−237,−16)
+  [SNG-spawnområdet] → slut (−688,85,184) [uppe vid megan]. Notera:
+  9,6 s < mega-målets 10,0-fönster. Ingen instansletning behövs — hela
+  demot ÄR instansen.
+- Referens i samma katalog: `milton_dm3_lift_to_sng_mega.qwd` (Miltons
+  körning) — jämförelsematerial, INTE kalibreringskälla för acceptansen
+  (ägarens tid styr).
+- Sekundär: `data\owner-demos\xersngmega-20260720.qwd` samt
+  `xersng.qwd` (rutt A-demot, kan innehålla B-varianter).
 - dm3-spawnpunkter: se auto-memory `dm3-spawns-and-flowchart` (6 spawns med
   koordinater; ren karta = dm3spawns.png). Identifiera vilka spawns som är
   "SNG-spawns" ur den + demot.
