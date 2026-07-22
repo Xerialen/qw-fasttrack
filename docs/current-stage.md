@@ -6,9 +6,9 @@ maturity: stage-1-prototype
 
 ## Current goal
 
-Deliver Toolbox v2 in the approved phases. Phase 1 is Trial v2 plus the
-Python side of P0 (playback coordinator, WebSocket robustness, and offline
-determinism), governed by `docs/plans/2026-07-22-toolbox-v2.md` rev 3+.
+Deliver Toolbox v2 in the approved phases. Phase 3 / P1 now implements the
+rev-3 hull-1 `bsp-probe` physics oracle in rex plus fail-closed Python glue in
+qw-fasttrack.
 
 ## Why this matters
 
@@ -17,8 +17,8 @@ slow replay client or hash iteration order from corrupting that evidence.
 
 ## Next smallest useful step
 
-Obtain the specified Claude review of the Phase 1 commit, then begin Phase 2
-viewer work only after that package is accepted.
+Obtain the specified independent Claude review of the Phase 3 commits, then
+begin Phase 4 / P3 only after this package is accepted.
 
 ## Active constraints
 
@@ -35,10 +35,11 @@ port, the route-lab main tree, or bot/engine code.
 
 ## Last known state
 
-Phase 1 implementation is locally complete: Trial v2 measures received
-positions at 15 Hz with streak evidence; replay has a single playback
-coordinator and per-client latest-frame writers; offline timeline/spec output
-is deterministically ordered. The WSL unittest suite is green (19 tests).
+Phase 3 implementation is locally complete. Rex branch `bsp-probe` provides a
+persistent JSONL hull-1 oracle pinned against the server's dm3 BSP. Python
+ingest/missing/replay use it with structured whole-run fallback and flagged
+mover-point fallback. The WSL unittest suite is green (24 tests); xersng oracle
+ingest is 1.16 s and has 4 missing cells, all on z=40/56/120 surfaces.
 
 ## Required docs to update
 

@@ -24,6 +24,7 @@ from pathlib import Path
 QWD_TOOLS = Path("/mnt/c/Users/benya/projects/quakeworld/tools/qwd-corpus-pipeline")
 sys.path.insert(0, str(QWD_TOOLS))
 import qwd_dump  # noqa: E402
+from ground_oracle import GroundOracle, OracleUnavailable, heuristic_evidence  # noqa: E402
 
 GRID = 32.0
 GROUND_WINDOW_S = 0.10   # one-sided plateau window, independent of demo fps
@@ -61,7 +62,7 @@ def load_samples(demo_path: str, player: int | None = None) -> list[tuple]:
     return out
 
 
-def grounded_mask(samples: list[tuple]) -> list[bool]:
+def _heuristic_grounded_mask(samples: list[tuple]) -> list[bool]:
     """Classify samples with stable time windows on either side.
 
     One-sided windows preserve the final ground sample before takeoff and the
@@ -114,6 +115,23 @@ def grounded_mask(samples: list[tuple]) -> list[bool]:
     return mask
 
 
+def grounded_mask(samples: list[tuple], oracle=None) -> list[bool]:
+    """Classify ground through bsp-probe, with flagged per-point mover fallback."""
+    heuristic = _heuristic_grounded_mask(samples)
+    if oracle is None:
+        return heuristic
+    mask = []
+    for index, sample in enumerate(samples):
+        point = sample[1:4]
+        response = oracle.probe(point)
+        if response["status"] == "unknown":
+            oracle.note_unknown(index, point, response)
+            mask.append(heuristic[index])
+        else:
+            mask.append(bool(response["grounded"]))
+    return mask
+
+
 def _speed_at(samples: list[tuple], i: int) -> float:
     if samples[i][4] is not None:
         return samples[i][4]
@@ -133,10 +151,10 @@ def _point_before(samples: list[tuple], i: int, mask: list[bool], back_s: float)
     return samples[j][1:4]
 
 
-def extract(samples: list[tuple], min_link_dist: float = 96.0) -> dict:
+def extract(samples: list[tuple], min_link_dist: float = 96.0, oracle=None) -> dict:
     """Required cells (clustered ground points) + deduped jump events."""
     samples = sorted(samples, key=sample_sort_key)
-    mask = grounded_mask(samples)
+    mask = grounded_mask(samples, oracle)
 
     cells: dict[tuple, list] = {}
     for s, g in zip(samples, mask):
@@ -265,15 +283,34 @@ def to_patch(extracted: dict, name: str, demo_path: str) -> dict:
 
 
 def ingest(demo_path: str, map_name: str, graph_path: str, name: str,
-           min_link_dist: float = 96.0, player: int | None = None) -> dict:
+           min_link_dist: float = 96.0, player: int | None = None,
+           probe_path: str | None = None) -> dict:
     samples = load_samples(demo_path, player)
-    extracted = extract(samples, min_link_dist)
+    oracle = None
+    evidence = heuristic_evidence()
+    try:
+        oracle = GroundOracle(map_name, probe_path)
+        try:
+            extracted = extract(samples, min_link_dist, oracle)
+            evidence = oracle.evidence()
+        except OracleUnavailable as error:
+            # Discard all partial oracle classifications: this run is now wholly heuristic.
+            extracted = extract(samples, min_link_dist, None)
+            evidence = heuristic_evidence(error.reason)
+    except OracleUnavailable as error:
+        extracted = extract(samples, min_link_dist, None)
+        evidence = heuristic_evidence(error.reason)
+    finally:
+        if oracle is not None:
+            oracle.close()
     graph = json.loads(Path(graph_path).read_text(encoding="utf-8"))
     summary = diff_vs_graph(extracted, graph)
     overlay = to_overlay(extracted, map_name)
     patch = to_patch(extracted, name, demo_path)
+    patch["provenance"]["grounding"] = evidence
     return {"summary": summary, "overlay": overlay, "patch": patch,
-            "duration_s": round(samples[-1][0] - samples[0][0], 1)}
+            "duration_s": round(samples[-1][0] - samples[0][0], 1),
+            "evidence": {"grounding": evidence}}
 
 
 if __name__ == "__main__":

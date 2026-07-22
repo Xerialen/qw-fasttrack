@@ -10,7 +10,8 @@ Needs NO game server: qwd file + graph JSON -> WS frames -> viewer.
 
 Run (WSL):
   nice -n 19 python3 demo_replay.py --demo xersng.qwd \
-      --graph .../fasttrack-graph.json [--speed 1.0] [--loop] [--ws-port 8093]
+      --graph .../fasttrack-graph.json --map dm3 \
+      [--speed 1.0] [--loop] [--ws-port 8093]
 
 Viewer: http://127.0.0.1:8090/?graph=<name>&live=<ws-port>
 """
@@ -32,6 +33,7 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import demo_mesh  # noqa: E402
+from ground_oracle import GroundOracle, OracleUnavailable, heuristic_evidence  # noqa: E402
 from live_bridge import Attribution, GraphContract, _ws_frame  # noqa: E402
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -68,12 +70,13 @@ class GraphMatcher:
         return best
 
 
-def build_timeline(demo_path: str, graph: GraphContract, player: int | None = None) -> list[dict]:
+def build_timeline(demo_path: str, graph: GraphContract, player: int | None = None,
+                   oracle=None) -> list[dict]:
     """Precompute per-sample playback state: pos, cell, used/missing sets."""
     # This public boundary also accepts alternate/test loaders; do not inherit
     # their iteration order even though the standard loader already sorts.
     samples = sorted(demo_mesh.load_samples(demo_path, player), key=demo_mesh.sample_sort_key)
-    mask = demo_mesh.grounded_mask(samples)
+    mask = demo_mesh.grounded_mask(samples, oracle)
     matcher = GraphMatcher(graph)
     attribution = Attribution()
     t0 = samples[0][0]
@@ -409,6 +412,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--demo", required=True)
     parser.add_argument("--graph", required=True, type=Path)
+    parser.add_argument("--map", default=None,
+                        help="BSP path or map name for bsp-probe; omitted means heuristic ground")
     parser.add_argument("--ws-port", type=int, default=8093)
     parser.add_argument("--speed", type=float, default=1.0)
     parser.add_argument("--loop", action="store_true")
@@ -419,12 +424,34 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     graph = GraphContract.load(args.graph)
-    timeline = build_timeline(args.demo, graph, args.player)
+    oracle = None
+    evidence = heuristic_evidence()
+    if args.map is None:
+        LOG.warning("--map omitted: using heuristic grounded classifier")
+        timeline = build_timeline(args.demo, graph, args.player)
+    else:
+        try:
+            oracle = GroundOracle(args.map)
+            try:
+                timeline = build_timeline(args.demo, graph, args.player, oracle)
+                evidence = oracle.evidence()
+            except OracleUnavailable as error:
+                LOG.warning("oracle run discarded; rerunning wholly heuristic: %s", error.reason)
+                timeline = build_timeline(args.demo, graph, args.player)
+                evidence = heuristic_evidence(error.reason)
+        except OracleUnavailable as error:
+            LOG.warning("oracle unavailable; using heuristic: %s", error.reason)
+            timeline = build_timeline(args.demo, graph, args.player)
+            evidence = heuristic_evidence(error.reason)
+        finally:
+            if oracle is not None:
+                oracle.close()
     if args.summary_only:
         final = timeline[-1]
         print(json.dumps({"duration_s": round(final["t"], 1),
                           "used": {k: len(v) for k, v in final["used"].items()},
-                          "missing": final["missing"]}, indent=1))
+                          "missing": final["missing"],
+                          "evidence": {"grounding": evidence}}, indent=1))
         return 0
     asyncio.run(ReplayServer(graph, timeline, args.ws_port, args.speed, args.loop).run())
     return 0

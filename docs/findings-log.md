@@ -140,3 +140,93 @@ active.
 ### Follow-up
 Run the required independent Claude review for Phase 1. Phase 2 can then add
 the optional playback field and controls to the isolated viewer worktree.
+
+## 2026-07-22 — Toolbox v2 Phase 3 / P1 bsp-probe
+
+### Experiment
+Build a persistent rex JSONL oracle around the existing `Bsp::hull1_trace`,
+then replace the demo ground classifier through the specified optional seam.
+Pin the exact BSP used by fasttrack's server skeleton, exercise the approved
+surface/apex points in Rust and Python, and compare real xersng ingest against
+the old heuristic under a 30-second gate.
+
+### Result
+Rex branch `bsp-probe` through commit
+`0e94183b15561bc610df30fbf41cd42b2e6073b0` adds `bsp-probe`. It loads one
+BSP per process, emits `{"v":1}` before
+serving requests, traces the standing-player hull 2u down from the supplied
+origin without pre-offset, and samples render-hull contents at the origin.
+The three dm3 moving brush models are reconstructed from the entity lump using
+stock door/plat/train travel rules. The probe samples their travel paths and
+traces the actual translated submodel hulls; a hit returns `unknown`.
+
+Python uses one long-lived subprocess with a five-second response bound.
+`unknown` points are individually marked and use the heuristic; a crash,
+timeout, invalid protocol row or `error` response discards every partial
+oracle result and restarts classification wholly in heuristic mode. Artifacts
+carry `method`, BSP SHA, probe commit, structured fallback reason and the list
+of per-point unknown fallbacks.
+
+The server skeleton BSP is
+`/home/xerial/.local/share/route-lab/nav-ab/qw/maps/dm3.bsp`. It is
+byteidentical to `/mnt/c/nQuake/qw/maps/dm3.bsp`; both hash to
+`aec9edbb727c0a206edc2c0688775ce8242c0d51e1ee7583c7126c76f7c3b2f1`.
+
+### Evidence
+
+- Rust: 67 library tests plus three binary tests passed (the mandatory
+  acceptance points, a translated intermediate mover position and scalar-yaw
+  secret-door orientation); final release build completed in 22.85 s.
+- Python: 24/24 WSL unittests passed in 8.826 s. The subprocess tests also ran
+  under `-W error::ResourceWarning` after closing the initial stdout-handle
+  leak found during the first focused run.
+- xersng oracle ingest: 1.16 s, 189 required cells, 4 missing cells, 33
+  required jumps and 14 missing jumps. Grounding provenance names BSP SHA
+  `aec9ed…b2f1`, probe commit `0e94183b…73b0`, method `oracle`, no mover
+  fallbacks in this recording.
+- Heuristic control: 182 required cells, 4 missing cells, 26 required jumps and
+  17 missing jumps. Thus the requested missing-cell count comparison is 4 vs
+  4; the oracle changes which samples/jumps are accepted, not this graph's
+  final number of missing cell buckets.
+- Oracle missing points are `(-292.6,548.2,120)`, approximately
+  `(79.5,670.5,40)`, `(310.1,670.4,56)`, `(336.2,666.1,56)`. The fourth
+  bucket centroid shifts from the heuristic's `(83.3,670.0,40)` because the
+  oracle admits additional genuine floor samples. All missing z values are
+  40/56/120; no ~99.8 apex class remains.
+
+### Interpretation
+The spec's hull correction is decisive: player origins are already the input
+coordinate system for hull 1. Applying another −24u would ask about a player
+box buried in the floor. Static BSP geometry can make stable-window heuristics
+miss genuine short contacts; conversely the trace removes the quantized apex
+without trajectory inference.
+
+### Deviations and corrections
+
+- The spec's example `/mnt/c/nQuake/qw/id1/maps/dm3.bsp` does not exist on
+  this machine. The live skeleton and nQuake copy above were found from
+  `fasttrack/core.py::SKELETON` and pinned instead, as explicitly permitted.
+- Repo-wide `cargo fmt --all -- --check` is already red on many unrelated
+  rex files. The new `bsp-probe.rs` passes a targeted rustfmt check; no
+  unrelated formatting was changed.
+- The golden missing-cell count is equal (oracle 4, heuristic 4), not lower.
+  The measured semantic delta is 189 vs 182 required cells and 14 vs 17
+  missing jumps; this result is recorded rather than forced to differ.
+- The first internal review found that Python initially attributed the current
+  rex HEAD rather than the built executable, and that mover detection used a
+  static submodel AABB. Both were rejected before handoff: the release binary
+  now embeds/returns its build commit (verified equal to final rex HEAD), and
+  mover-space uses translated submodel hull traces over reconstructed stock
+  travel paths, including secret-door two-stage travel and closed train loops.
+  The golden was also strengthened to assert the nearest real
+  xersng samples for all four approved surface points through the ingest seam.
+
+### Confidence
+High for static-world floor/apex semantics, build provenance and
+crash/fallback behavior on pinned dm3. Medium around moving brushes: stock
+door/plat/train paths are reconstructed and actual hulls are traced, but the
+oracle intentionally cannot observe a mover's instantaneous live position.
+
+### Follow-up
+Run the required independent Claude Phase 3 review. If accepted, proceed to P3
+and use the new grounding provenance in its proof bundle.

@@ -777,7 +777,8 @@ def missing_spec(name: str, map: str, demo: str | None = None) -> dict:
         if not graph_file.exists():
             graph_file = VIEWER_OVERLAYS / f"{map}-graph.json"
         result = demo_mesh.ingest(_wsl_path(demo), map, str(graph_file), name)
-        payload = {"source": {"demo": Path(_wsl_path(demo)).name},
+        payload = {"source": {"demo": Path(_wsl_path(demo)).name,
+                              "grounding": result["evidence"]["grounding"]},
                    "summary": result["summary"],
                    "patch_for_missing_links": result["patch"]}
     else:
@@ -827,6 +828,7 @@ def demo_ingest(demo: str, map: str, name: str | None = None,
     patch_path = PATCHES_DIR / f"{name}.json"
     patch_path.write_text(json.dumps(result["patch"], indent=1), encoding="utf-8")
     return {"summary": result["summary"], "duration_s": result["duration_s"],
+            "evidence": result["evidence"],
             "diffed_against": graph,
             "overlay": str(overlay_path),
             "viewer": f"http://127.0.0.1:8088/?graph={name}",

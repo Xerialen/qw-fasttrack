@@ -78,6 +78,23 @@ försök, dumpar grafen).
   med QWD-veton för apex-vändpunkter och vertikala steg in i en närliggande
   landningsplatå. Livebryggan kräver tre konsekutiva unresolved-ticks med
   |Δz| < 2u. Därmed renderas röda cellglyfer på ytor i stället för i luften.
+- **FAS 3 / `bsp-probe`:** `demo_ingest` och `missing_spec` använder nu rex
+  releasebinär som fysikorakel när `map` kan lösas till en BSP. Proben laddar
+  kartan en gång, tar spelar-origin och spårar hull 1 högst 2u nedåt; ingen
+  egen −24u-preoffset görs. `floor_z` är träffens origin-z minus 24u. Punkter
+  i dörr-/plat-/train-volymer får `status=unknown`, faller tillbaka på
+  heuristiken per punkt och listas explicit i `unknown_fallbacks`. Om processen
+  kraschar eller svarar fel kastas hela den partiella klassningen och körningen
+  görs om som ren heuristik med strukturerat `fallback_reason`.
+- Binären hittas utan PATH-sökning: sätt explicit
+  `FASTTRACK_BSP_PROBE=/absolut/sökväg/bsp-probe`, annars provas endast
+  `/mnt/c/Users/benya/projects/quakeworld/rex/target/release/bsp-probe`.
+  `FASTTRACK_BSP_PROBE_COMMIT` kan sättas för en extern kompatibel binär;
+  rex-binären bäddar annars in byggcommitten och exponerar den via
+  `--probe-commit`. Kartnamn löses i fasttracks skeleton
+  (`~/.local/share/route-lab/nav-ab/qw/maps/<map>.bsp`); en explicit BSP-sökväg
+  accepteras också. Output bär `method`, `bsp_sha`, `probe_commit` och flaggade
+  per-punkt-fallbacks.
 - Kända begränsningar (klarspråk): länkattributionen är geometrisk med
   tolerans (80u) och kan missa/överflagga i täta områden; `used`-listor
   växer obegränsat per attempt (reset vid goto); bottens ruttval är dess
@@ -90,6 +107,31 @@ försök, dumpar grafen).
 Förbjudna cvars (`rtx_bot_ledgecap`/`rtx_walljump`/`rtx_doublejump`) pinnade
 0 i cfg:en; `nice -19` på allt tungt; regel 11.2 (människodemos = kalibrering,
 aldrig trajektorier in i bot-kod); egna portar.
+
+## Bygg och verifiera bsp-probe
+
+Den pinnade fixture som fasttrack-serverns skeleton använder är
+`/home/xerial/.local/share/route-lab/nav-ab/qw/maps/dm3.bsp`; den är
+byteidentisk med `/mnt/c/nQuake/qw/maps/dm3.bsp`, SHA-256
+`aec9edbb727c0a206edc2c0688775ce8242c0d51e1ee7583c7126c76f7c3b2f1`.
+Rusttestet använder den senare absoluta sökvägen och är avsiktligt inte
+skippbart.
+
+```sh
+cd /mnt/c/Users/benya/projects/quakeworld/rex
+PATH=$HOME/.cargo/bin:$PATH nice -n 19 cargo test -p rtx-nav --bin bsp-probe -- --nocapture
+PATH=$HOME/.cargo/bin:$PATH nice -n 19 cargo build --release
+
+cd /mnt/c/Users/benya/projects/quakeworld/qw-fasttrack
+nice -n 19 python3 fasttrack/demo_replay.py \
+  --demo /mnt/c/nQuake/qw/matchinfo/demos/xersng.qwd \
+  --graph /mnt/c/Users/benya/projects/quakeworld/route-lab-viewer-live/qw-nav-viewer/overlays/fasttrack-graph.json \
+  --map dm3 --summary-only
+```
+
+Utan `demo_replay.py --map` används uttryckligen heuristiken och en varningsrad
+skrivs. `demo_mesh.py --map dm3` använder däremot samma parameter både som
+kartnamn i artefakten och för oracle-discovery.
 
 ## Roadmap
 

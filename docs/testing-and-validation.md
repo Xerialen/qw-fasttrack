@@ -91,3 +91,47 @@ the SHA-256 hashes to match. No game server was started. A direct PowerShell
 invocation is not the supported runtime (`python3` there resolves to Windows
 Python and cannot resolve the documented WSL-only qwd/fixture paths); the same
 literal unittest command is green in Ubuntu-24.04.
+
+## Toolbox v2 Phase 3 / P1 bsp-probe (2026-07-22)
+
+Rust validation runs in Ubuntu-24.04 from the rex `bsp-probe` branch with
+`PATH=$HOME/.cargo/bin:$PATH` and `nice -n 19`. The non-skippable binary test
+pins `/mnt/c/nQuake/qw/maps/dm3.bsp` to SHA-256
+`aec9edbb727c0a206edc2c0688775ce8242c0d51e1ee7583c7126c76f7c3b2f1`.
+It requires the four approved surface origins to be grounded with
+`floor_z = origin.z - 24 ±1u` and rejects `(313,586,99.8)`.
+
+```text
+$ cargo test -p rtx-nav
+running 67 tests
+test result: ok. 67 passed; 0 failed
+running 3 tests
+test tests::pinned_dm3_acceptance_points_follow_hull_one_origin_semantics ... ok
+test tests::pinned_dm3_mover_travel_uses_real_translated_hulls ... ok
+test tests::secret_door_scalar_angle_is_yaw ... ok
+test result: ok. 3 passed; 0 failed
+
+$ cargo build --release
+Finished `release` profile [optimized] target(s) in 22.85s
+```
+
+Python tests cover the real process and pinned points, a 5-second bounded
+protocol client (shortened to 0.05s in the timeout fixture), flagged per-point
+`unknown` fallback, failover that discards a partial oracle run, and the real
+xersng golden comparison.
+
+```text
+$ python3 -m unittest discover -s fasttrack/tests
+........................
+----------------------------------------------------------------------
+Ran 24 tests in 8.826s
+
+OK
+```
+
+The timed real xersng oracle ingest completed in 1.16 s, below the 30 s gate.
+It reported 189 required cells, 4 missing cells and 14 missing jumps. The
+heuristic control reported 182 required cells, 4 missing cells and 17 missing
+jumps. Oracle missing-cell z values are only 40/56/120; the apex class is gone.
+The built binary's `--probe-commit` output exactly matched rex HEAD
+`0e94183b15561bc610df30fbf41cd42b2e6073b0` after the final release build.
