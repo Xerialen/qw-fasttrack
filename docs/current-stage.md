@@ -1,13 +1,23 @@
 # Current Stage
 
-last-verified: 2026-07-22
+last-verified: 2026-07-22 (kväll)
 status: active
 maturity: stage-1-prototype
+
+## ⭐ LÄS FÖRST om du är ny här
+
+**Målacceptansen är GRÖN och hela lösningen är dokumenterad i
+[docs/solutions/2026-07-22-dm3-under-lifts-to-sng.md](solutions/2026-07-22-dm3-under-lifts-to-sng.md)**
+— tolv rotorsaker i fem lager (navmesh-data, exekutorn, tillståndsläckor,
+verktygsbuggar, världens hissar), exakta commits/konstanter, evidensvägar,
+reproduktionskommandon, samt pekaren till systerlösningen
+**RA-tunnel→RA-topp** (route-lab spår 1, draft-PR qw-ctf/rtx#6). Börja där.
 
 ## Current goal
 
 Deliver Toolbox v2 in the approved phases. Phase 4 / P3 is locally implemented:
 the rev-3 `gap_to_proof` workflow, promote v2 gate, and canonical overlay store.
+**2026-07-22 kväll: mål-acceptansen (5 raka ≤3,82 s) UPPNÅDD — se ⭐ ovan.**
 
 ## Why this matters
 
