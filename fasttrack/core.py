@@ -330,6 +330,16 @@ def patch_apply(patch: dict, store: bool = True) -> dict:
         for add in patch.get("adds") or []:
             kind = add.get("kind")
             try:
+                if kind == "Cell":
+                    # Standable cell (edge strips the generator's clearance margin skips).
+                    # Server-side plant_cell snaps z to the floor and wires Walk/Step links
+                    # to reachable neighbours in both directions.
+                    x, y, z = add["at"]
+                    r = c.request(f"plancell {x:g} {y:g} {z:g}")
+                    summary["adds_ok"] += 1
+                    summary["detail"].append({"add": kind, "cell": (r.get("data") or {}).get("cell"),
+                                              "links": (r.get("data") or {}).get("links_created")})
+                    continue
                 f, t = add["from"], add["to"]
                 if kind in ("SpeedJump", "JumpGap"):
                     lip = add.get("takeoff") or f

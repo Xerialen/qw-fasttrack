@@ -227,13 +227,26 @@ def diff_vs_graph(extracted: dict, graph: dict) -> dict:
     def near(a, b, tol):
         return math.hypot(a[0] - b[0], a[1] - b[1]) <= tol and abs(a[2] - b[2]) <= CELL_MATCH_Z
 
+    def seg_near(a, b, p, tol):
+        # XY distance from p to the segment a->b, z inside the segment's z-range.
+        # A planted SpeedJump's SOURCE is its runway start, often far behind the
+        # physical takeoff — endpoint matching alone re-flags jumps the mesh has.
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        l2 = dx * dx + dy * dy
+        t = 0.0 if l2 == 0 else max(0.0, min(1.0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2))
+        qx, qy = a[0] + t * dx, a[1] + t * dy
+        if math.hypot(p[0] - qx, p[1] - qy) > tol:
+            return False
+        return min(a[2], b[2]) - CELL_MATCH_Z <= p[2] <= max(a[2], b[2]) + CELL_MATCH_Z
+
     cells_missing = sorted(
         (p for p in extracted["cells"].values() if not cell_covered(p)),
         key=lambda point: tuple(float(value) for value in point),
     )
     for jump in extracted["jumps"]:
         jump["covered"] = any(
-            near(live_cells[l[0]], jump["takeoff"], LINK_MATCH)
+            (near(live_cells[l[0]], jump["takeoff"], LINK_MATCH)
+             or seg_near(live_cells[l[0]], live_cells[l[1]], jump["takeoff"], LINK_MATCH))
             and near(live_cells[l[1]], jump["landing"], LINK_MATCH)
             for l in live_links)
     return {"cells_required": len(extracted["cells"]),
