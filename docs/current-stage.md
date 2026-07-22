@@ -13,6 +13,13 @@ verktygsbuggar, världens hissar), exakta commits/konstanter, evidensvägar,
 reproduktionskommandon, samt pekaren till systerlösningen
 **RA-tunnel→RA-topp** (route-lab spår 1, draft-PR qw-ctf/rtx#6). Börja där.
 
+**Metoden som replikerbar runbook:**
+[docs/runbooks/qwd-till-gron-rutt.md](runbooks/qwd-till-gron-rutt.md)
+(qwd → referens → gap → kuraterad plantering → trial → telemetri →
+regression → botkod). **Tar du över som nytt säte:** läs
+[docs/plans/2026-07-23-seat-handoff-branches.md](plans/2026-07-23-seat-handoff-branches.md)
+(exakt branchläge, live-läge, kvarvarande arbete, ägarbeslut).
+
 ## Current goal
 
 Deliver Toolbox v2 in the approved phases. Phase 4 / P3 is locally implemented:
