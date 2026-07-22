@@ -6,40 +6,45 @@ maturity: stage-1-prototype
 
 ## Current goal
 
-Deliver Toolbox v2 in the approved phases. Phase 3 / P1 now implements the
-rev-3 hull-1 `bsp-probe` physics oracle in rex plus fail-closed Python glue in
-qw-fasttrack.
+Deliver Toolbox v2 in the approved phases. Phase 4 / P3 is locally implemented:
+the rev-3 `gap_to_proof` workflow, promote v2 gate, and canonical overlay store.
 
 ## Why this matters
 
-It makes the eventual demo-to-gap-to-patch proof chain measurable and keeps a
-slow replay client or hash iteration order from corrupting that evidence.
+It turns the demo-to-gap-to-patch chain into one owned, ordered A/B proof run
+with bounded phases, cleanup on every exit, and SHA-bound promotion evidence.
 
 ## Next smallest useful step
 
-Obtain the specified independent Claude review of the Phase 3 commits, then
-begin Phase 4 / P3 only after this package is accepted.
+Obtain the specified independent Claude review of the Phase 4 commit. After
+acceptance, run the real owner-approved route proof only when port 27530 is free.
 
 ## Active constraints
 
 - Keep library code map-agnostic; dm3 is allowed only in smoke/fixtures/docs.
-- Do not modify bot/engine code or route-lab's main worktree.
+- Do not modify bot/engine code or route-lab main source/code. The canonical
+  main-tree overlay data directory is the explicit Phase 4 exception.
 - Preserve the protected ports listed in the v1 plan.
-- Viewer work happens only on the isolated `viewer-live-fasttrack` worktree.
+- Viewer source work happens only on the isolated `viewer-live-fasttrack`
+  worktree; overlay data lives canonically in route-lab main because that is
+  the directory served by the 18089 sidecar/trunk proxy.
 
 ## Stop conditions
 
 Stop if the documented graph/control contracts cannot be reconciled with live
 behavior, or if an exact plan requirement would require touching a protected
-port, the route-lab main tree, or bot/engine code.
+port, route-lab main source/code, any main-tree path other than the explicitly
+approved canonical overlay directory, or bot/engine code.
 
 ## Last known state
 
-Phase 3 implementation is locally complete. Rex branch `bsp-probe` provides a
-persistent JSONL hull-1 oracle pinned against the server's dm3 BSP. Python
-ingest/missing/replay use it with structured whole-run fallback and flagged
-mover-point fallback. The WSL unittest suite is green (24 tests); xersng oracle
-ingest is 1.16 s and has 4 missing cells, all on z=40/56/120 surfaces.
+Phase 4 implementation is locally complete. `gap_to_proof` enforces inactive
+server/live units before mutation, exact clean-baseline ordering, one patch
+application, Trial v2 A/B, per-phase+total timeouts, and cleanup restart under
+ordinary errors or cancellation. Partial manifests survive mid-run failures.
+`promote` now verifies the bundle SHAs and patched streak. The WSL unit suite is
+green (33 tests); all server/control behavior in Phase 4 tests is mocked, so the
+externally owned server on 27530 was not started, stopped, or contacted.
 
 ## Required docs to update
 

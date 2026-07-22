@@ -135,3 +135,29 @@ heuristic control reported 182 required cells, 4 missing cells and 17 missing
 jumps. Oracle missing-cell z values are only 40/56/120; the apex class is gone.
 The built binary's `--probe-commit` output exactly matched rex HEAD
 `0e94183b15561bc610df30fbf41cd42b2e6073b0` after the final release build.
+
+## Toolbox v2 Phase 4 / P3 gap_to_proof (2026-07-22)
+
+Phase 4 deliberately used only mocked server/unit/control seams because port
+27530 was owned by another active task. Unit coverage proves both ownership
+aborts occur before mutation, the exact baseline→G0→ingest→Trial A→single
+apply→Trial B→clear/restart order, cleanup after a middle-phase exception,
+`partial:true` evidence, and the identical cleanup path for `KeyboardInterrupt`.
+Promotion tests reject a patched streak below target and a SHA-valid empty A/B
+table, then accept/copy a complete SHA-verified A/B bundle. The MCP protocol
+now lists 17 tools.
+
+```text
+$ python3 -m unittest discover -s fasttrack/tests
+.................................
+----------------------------------------------------------------------
+Ran 33 tests in 5.271s
+
+OK
+```
+
+The first full run exposed that the recorded link-attribution fixture still
+named worktree link ID 50259 after consumers moved to the canonical main-tree
+overlay. The main graph has the same recorded cell traversal under link IDs
+38040/38041; the fixture was corrected to that canonical pair and the complete
+suite then passed. No game server was started or stopped.

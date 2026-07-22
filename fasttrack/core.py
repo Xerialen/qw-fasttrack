@@ -10,10 +10,12 @@ import json
 import hashlib
 import math
 import os
+import signal
 import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -29,6 +31,21 @@ VIEWER_UNIT = "fasttrack-viewer"
 REPLAY_UNIT = "fasttrack-replay"
 REPLAY_WS_PORT = 8095
 
+GAP_WORK_TIMEOUT_S = 3600.0
+# The total reserves cleanup + evidence finalization after the work deadline;
+# a work timeout therefore cannot consume the time needed for restoration.
+GAP_TOTAL_TIMEOUT_S = 5430.0
+GAP_PHASE_TIMEOUTS_S = {
+    "baseline_boot": 1800.0,
+    "graph_dump": 180.0,
+    "demo_ingest": 300.0,
+    "baseline_trial": 600.0,
+    "patch_apply": 60.0,
+    "patched_trial": 600.0,
+    "cleanup_restart": 1800.0,
+    "evidence_write": 30.0,
+}
+
 RUNTIME = Path.home() / ".local" / "share" / "qw-fasttrack" / "runtime"
 STATE_DIR = Path.home() / ".local" / "share" / "qw-fasttrack"
 ACTIVE_PATCH = STATE_DIR / "active-patch.json"
@@ -42,7 +59,9 @@ PROMOTE_DIR = ROUTE_LAB / "artifacts" / "nav-patches"
 SKELETON = Path.home() / ".local" / "share" / "route-lab" / "nav-ab"
 DEFAULT_LIB = Path.home() / ".local" / "share" / "route-lab" / "rtx-main" / "qw" / "qwprogs.so"
 DUMP_LIVE_GRAPH = Path("/mnt/c/Users/benya/projects/quakeworld/route-lab/ops/dump_live_graph.py")
-VIEWER_OVERLAYS = Path("/mnt/c/Users/benya/projects/quakeworld/route-lab/qw-nav-viewer/overlays")
+# Canonical overlay store: this is what the 18089 sidecar and trunk proxy serve.
+# VIEWER_WORKTREE remains the isolated viewer source/build directory only.
+OVERLAYS_DIR = Path("/mnt/c/Users/benya/projects/quakeworld/route-lab/qw-nav-viewer/overlays")
 VIEWER_WORKTREE = Path("/mnt/c/Users/benya/projects/quakeworld/route-lab-viewer-live/qw-nav-viewer")
 FASTTRACK_DIR = Path(__file__).resolve().parent
 LIVE_BRIDGE = FASTTRACK_DIR / "live_bridge.py"
@@ -575,7 +594,8 @@ def graph_dump(map: str, seed: list[float], out_name: str = "fasttrack") -> dict
     the map (crawl start) — map-agnostic, caller supplies it."""
     if LIVE_STATE.exists():
         raise RuntimeError("stoppa live-bryggan först")
-    out = VIEWER_OVERLAYS / f"{out_name}-graph.json"
+    OVERLAYS_DIR.mkdir(parents=True, exist_ok=True)
+    out = OVERLAYS_DIR / f"{out_name}-graph.json"
     _sh("python3", str(DUMP_LIVE_GRAPH), "--port", str(CONTROL_PORT),
         "--map", map, "--seed", *(f"{x:g}" for x in seed), "--out", str(out))
     graph_bytes = out.read_bytes()
@@ -608,6 +628,16 @@ def _unit_active(unit: str) -> bool:
     ).returncode == 0
 
 
+def _unit_status(unit: str) -> str:
+    result = subprocess.run(
+        ["systemctl", "--user", "is-active", unit], capture_output=True, text=True)
+    status = result.stdout.strip()
+    if status:
+        return status
+    detail = result.stderr.strip() or "no status output"
+    return f"error(rc={result.returncode}): {detail}"
+
+
 def _wait_for_state(timeout_s: float = 45.0) -> dict:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
@@ -629,7 +659,7 @@ def live_start(map: str, graph_name: str) -> dict:
     """Start the single-owner bridge, then ensure the isolated viewer is served."""
     if not _safe_overlay_name(graph_name):
         raise ValueError("graph_name must contain only ASCII letters, digits, '-' or '_'")
-    graph = VIEWER_WORKTREE / "overlays" / f"{graph_name}-graph.json"
+    graph = OVERLAYS_DIR / f"{graph_name}-graph.json"
     if not graph.exists():
         raise FileNotFoundError(f"viewer graph not found: {graph}")
     if not (SKELETON / "qw" / "maps" / f"{map}.bsp").exists():
@@ -740,8 +770,8 @@ def demo_replay_start(demo: str, graph_name: str, speed: float = 1.0) -> dict:
     demo_path = _wsl_path(demo)
     if not Path(demo_path).exists():
         raise FileNotFoundError(f"demo {demo_path} not found")
-    # Same file the browser fetches (worktree serve dir) — sha guard must match.
-    graph_path = VIEWER_WORKTREE / "overlays" / f"{graph_name}-graph.json"
+    # Same canonical main-tree overlay the 18089 sidecar/browser fetches.
+    graph_path = OVERLAYS_DIR / f"{graph_name}-graph.json"
     if not graph_path.exists():
         raise FileNotFoundError(f"viewer graph not found: {graph_path}")
     subprocess.run(["systemctl", "--user", "stop", REPLAY_UNIT], capture_output=True)
@@ -773,9 +803,7 @@ def missing_spec(name: str, map: str, demo: str | None = None) -> dict:
     route-lab artifacts/nav-patches/<map>-<name>-missing-spec.json."""
     if demo is not None:
         import demo_mesh
-        graph_file = VIEWER_WORKTREE / "overlays" / f"{map}-graph.json"
-        if not graph_file.exists():
-            graph_file = VIEWER_OVERLAYS / f"{map}-graph.json"
+        graph_file = OVERLAYS_DIR / f"{map}-graph.json"
         result = demo_mesh.ingest(_wsl_path(demo), map, str(graph_file), name)
         payload = {"source": {"demo": Path(_wsl_path(demo)).name,
                               "grounding": result["evidence"]["grounding"]},
@@ -811,9 +839,9 @@ def demo_ingest(demo: str, map: str, name: str | None = None,
         raise ValueError("mvd not supported yet — use the qwd (positions parser pending)")
     name = name or Path(demo_path).stem
     if graph is None:
-        graph = str(VIEWER_OVERLAYS / f"{map}-graph.json")
+        graph = str(OVERLAYS_DIR / f"{map}-graph.json")
     elif "/" not in graph and "\\" not in graph:
-        graph = str(VIEWER_OVERLAYS / f"{graph}-graph.json")
+        graph = str(OVERLAYS_DIR / f"{graph}-graph.json")
     else:
         graph = _wsl_path(graph)
     if not Path(graph).exists():
@@ -821,7 +849,8 @@ def demo_ingest(demo: str, map: str, name: str | None = None,
                                 f"or pass graph=<overlay name|path>")
     import demo_mesh
     result = demo_mesh.ingest(demo_path, map, graph, name, min_link_dist, player)
-    overlay_path = VIEWER_OVERLAYS / f"{name}-graph.json"
+    OVERLAYS_DIR.mkdir(parents=True, exist_ok=True)
+    overlay_path = OVERLAYS_DIR / f"{name}-graph.json"
     overlay_path.write_text(json.dumps(result["overlay"], separators=(",", ":")),
                             encoding="utf-8")
     PATCHES_DIR.mkdir(parents=True, exist_ok=True)
@@ -837,52 +866,362 @@ def demo_ingest(demo: str, map: str, name: str | None = None,
             "next": f"patch_apply(<patch file content>) -> trial(...) -> promote({name!r})"}
 
 
+def _gap_phase(name: str, started_at: float, operation: Callable[[], dict]) -> dict:
+    """Run one synchronous phase under both its own and the workflow deadline.
+
+    The production runtime is WSL/main-thread, where SIGALRM interrupts blocked
+    Python/subprocess calls. Other runtimes fail closed before the operation;
+    an after-the-fact elapsed check is not a timeout.
+    """
+    budget = (GAP_TOTAL_TIMEOUT_S if name in ("cleanup_restart", "evidence_write")
+              else GAP_WORK_TIMEOUT_S)
+    total_remaining = budget - (time.monotonic() - started_at)
+    limit = min(GAP_PHASE_TIMEOUTS_S[name], total_remaining)
+    if limit <= 0:
+        raise TimeoutError(f"gap_to_proof total timeout before {name}")
+
+    can_alarm = hasattr(signal, "SIGALRM") and threading.current_thread() is threading.main_thread()
+    if not can_alarm:
+        raise RuntimeError("bounded gap_to_proof phases require WSL/POSIX main-thread SIGALRM")
+    old_handler = None
+    old_timer = None
+    phase_started = time.monotonic()
+    def timed_out(_signum, _frame):
+        raise TimeoutError(f"gap_to_proof phase {name} timed out after {limit:g}s")
+
+    old_handler = signal.signal(signal.SIGALRM, timed_out)
+    old_timer = signal.setitimer(signal.ITIMER_REAL, limit)
+    try:
+        result = operation()
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, old_handler)
+        if old_timer and old_timer[0] > 0:
+            signal.setitimer(signal.ITIMER_REAL, *old_timer)
+    elapsed = time.monotonic() - phase_started
+    if elapsed > limit:
+        raise TimeoutError(f"gap_to_proof phase {name} timed out after {limit:g}s")
+    return result
+
+
+def _write_json(path: Path, value: dict) -> None:
+    path.write_text(json.dumps(value, indent=1, ensure_ascii=False), encoding="utf-8")
+
+
+def _proof_attempts(baseline: dict, patched: dict) -> list[dict]:
+    rows = []
+    before = baseline.get("rows") or []
+    after = patched.get("rows") or []
+    for index in range(max(len(before), len(after))):
+        baseline_row = before[index] if index < len(before) else None
+        patched_row = after[index] if index < len(after) else None
+        baseline_elapsed = baseline_row.get("elapsed") if baseline_row else None
+        patched_elapsed = patched_row.get("elapsed") if patched_row else None
+        rows.append({
+            "attempt": index + 1,
+            "baseline": ({key: baseline_row.get(key)
+                          for key in ("elapsed", "outcome", "streak")}
+                         if baseline_row else None),
+            "patched": ({key: patched_row.get(key)
+                         for key in ("elapsed", "outcome", "streak")}
+                        if patched_row else None),
+            # Negative means the patch was faster. Unpaired/timeout rows have no delta.
+            "delta_s": (round(float(patched_elapsed) - float(baseline_elapsed), 6)
+                        if baseline_elapsed is not None and patched_elapsed is not None else None),
+        })
+    return rows
+
+
+def gap_to_proof(demo: str, map: str, seed: list[float], route: dict,
+                 name: str | None = None) -> dict:
+    """Execute the ordered clean-baseline -> gap -> A/B proof workflow.
+
+    Ownership is deliberately checked before the first mutation. Once this
+    function boots the server, every exit (including cancellation) clears the
+    patch and restarts the map into a clean state.
+    """
+    if not isinstance(route, dict):
+        raise ValueError("route is required")
+    missing = [key for key in ("start", "target", "arrive_box") if key not in route]
+    if missing:
+        raise ValueError(f"route is missing required fields: {', '.join(missing)}")
+    if len(seed) != 3:
+        raise ValueError("seed must contain three coordinates")
+    if not all(isinstance(route[key], list) for key in ("start", "target", "arrive_box")):
+        raise ValueError("route start, target and arrive_box must be arrays")
+
+    # Unit status is the ownership authority. Never stop or inherit a server
+    # or bridge started by somebody else.
+    server_unit_status = _unit_status(UNIT)
+    if server_unit_status != "inactive":
+        raise RuntimeError(
+            f"experimentservern {UNIT} är inte säkert inaktiv ({server_unit_status}); "
+            "gap_to_proof tar aldrig över en körande eller oklar server")
+    live_unit_status = _unit_status(LIVE_UNIT)
+    if live_unit_status != "inactive":
+        raise RuntimeError(
+            f"live-bryggan {LIVE_UNIT} är inte säkert inaktiv ({live_unit_status}); "
+            "stoppa eller återställ den innan gap_to_proof")
+
+    run_name = name or Path(_wsl_path(demo)).stem
+    if not _safe_overlay_name(run_name):
+        raise ValueError("name may contain only ASCII letters, digits, '-' and '_'")
+    bundle = EVIDENCE_DIR / run_name
+    bundle.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+    current_phase = "baseline_boot"
+    phase_elapsed: dict[str, float] = {}
+    ingest_result = None
+    patch_value = None
+    baseline = None
+    patched = None
+    graph_result = None
+    failure: BaseException | None = None
+    failure_tb = None
+    cleanup_errors = []
+    completed = False
+
+    def phase(phase_name: str, operation: Callable[[], dict]) -> dict:
+        nonlocal current_phase
+        current_phase = phase_name
+        phase_started = time.monotonic()
+        try:
+            return _gap_phase(phase_name, started, operation)
+        finally:
+            phase_elapsed[phase_name] = round(time.monotonic() - phase_started, 6)
+
+    try:
+        # A stale bridge state file is not ownership; the inactive unit status
+        # above permits removing it before graph_dump's conservative interlock.
+        _remove_live_state()
+
+        def clean_boot() -> dict:
+            patch_clear()
+            return server_up(map)
+
+        phase("baseline_boot", clean_boot)
+        graph_result = phase(
+            "graph_dump", lambda: graph_dump(map, seed, f"{run_name}-baseline"))
+        ingest_result = phase(
+            "demo_ingest", lambda: demo_ingest(
+                demo, map, run_name, str(graph_result["out"])))
+        patch_value = json.loads(Path(ingest_result["patch"]).read_text(encoding="utf-8"))
+
+        trial_args = {
+            "arrive_box": route["arrive_box"],
+            "pass_time_s": (float(route["pass_time_s"])
+                            if route.get("pass_time_s") is not None else None),
+            # Supplying the default explicitly guarantees Trial v2 even when
+            # the caller omits both optional route gates.
+            "streak_target": int(route.get("streak_target", 5)),
+        }
+        baseline = phase(
+            "baseline_trial", lambda: trial(route["start"], route["target"], **trial_args))
+        phase("patch_apply", lambda: patch_apply(patch_value))
+        patched = phase(
+            "patched_trial", lambda: trial(route["start"], route["target"], **trial_args))
+        completed = True
+    except BaseException as exc:
+        failure = exc
+        failure_tb = exc.__traceback__
+    finally:
+        # Clear and restart are independent cleanup obligations: a failed clear
+        # must not prevent the clean restart attempt.
+        try:
+            patch_clear()
+        except BaseException as exc:
+            cleanup_errors.append(f"patch_clear: {type(exc).__name__}: {exc}")
+        try:
+            _gap_phase("cleanup_restart", started, lambda: server_up(map))
+        except BaseException as exc:
+            cleanup_errors.append(f"server_restart: {type(exc).__name__}: {exc}")
+
+        partial = not completed or bool(cleanup_errors)
+        artifacts: dict[str, dict] = {}
+        if ingest_result is not None and patch_value is not None:
+            artifacts["gaps.json"] = {
+                "schema": "qw-gap-evidence/1", "map": map, "name": run_name,
+                "summary": ingest_result.get("summary"),
+                "missing_cells": (ingest_result.get("summary") or {}).get("cells_missing_points"),
+                "missing_links": patch_value.get("adds") or [],
+                "grounding": (ingest_result.get("evidence") or {}).get("grounding"),
+                "overlay": ingest_result.get("overlay"),
+            }
+            artifacts["patch.json"] = patch_value
+        if baseline is not None and patched is not None:
+            artifacts["ab.json"] = {
+                "schema": "qw-gap-proof-ab/1", "route": route,
+                "baseline": baseline, "patched": patched,
+                "attempts": _proof_attempts(baseline, patched),
+            }
+        if graph_result is not None:
+            grounding = ((ingest_result or {}).get("evidence") or {}).get("grounding") or {}
+            patched_provenance = (patched or {}).get("provenance") or {}
+            patch_file_sha = (hashlib.sha256(json.dumps(patch_value, indent=1).encode()).hexdigest()
+                              if patch_value is not None else None)
+            artifacts["provenance.json"] = {
+                "schema": "qw-gap-proof-provenance/1",
+                "graph_sha": graph_result.get("graph_sha"),
+                "patch_sha": patched_provenance.get("patch_sha") or patch_file_sha,
+                "bsp_sha": grounding.get("bsp_sha"),
+                "probe_commit": grounding.get("probe_commit"),
+                "cvar_readback": {
+                    "baseline": (baseline or {}).get("provenance", {}).get("cvar_readback"),
+                    "patched": patched_provenance.get("cvar_readback"),
+                },
+            }
+
+        def write_bundle() -> dict:
+            manifest_files = []
+            for filename, payload in artifacts.items():
+                path = bundle / filename
+                _write_json(path, payload)
+                manifest_files.append({
+                    "file": filename,
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                })
+            manifest = {
+                "schema": "qw-gap-proof-manifest/1", "name": run_name, "map": map,
+                "partial": partial,
+                "failed_phase": current_phase if failure is not None else None,
+                "error": (f"{type(failure).__name__}: {failure}"
+                          if failure is not None else None),
+                "cleanup_errors": cleanup_errors,
+                "phase_elapsed_s": phase_elapsed,
+                "total_elapsed_s": round(time.monotonic() - started, 6),
+                "files": manifest_files,
+            }
+            _write_json(bundle / "manifest.json", manifest)
+            return manifest
+
+        _gap_phase("evidence_write", started, write_bundle)
+
+    if failure is not None:
+        raise failure.with_traceback(failure_tb)
+    if cleanup_errors:
+        raise RuntimeError(
+            f"gap_to_proof proof completed but cleanup failed; partial bundle: {bundle}: "
+            + "; ".join(cleanup_errors))
+    return {"bundle": str(bundle), "manifest": str(bundle / "manifest.json"),
+            "partial": False, "passed": bool(patched and patched.get("passed")),
+            "baseline_streak": baseline.get("streak_max"),
+            "patched_streak": patched.get("streak_max")}
+
+
 def promote(name: str, map: str) -> dict:
     """Promote a proven patch to production: route-lab artifact + hand-off.
 
-    Refuses without trial evidence (the ledger trial() writes). Production =
-    artifacts/nav-patches/ in route-lab plus a hand-off draft for the
-    orchestrator PR lane; committing is left to the operator."""
+    The v2 gate is a complete, SHA-verified gap_to_proof bundle whose patched
+    Trial v2 reached its streak target. A legacy ledger with ok>0 is not proof.
+    """
     patch_path = PATCHES_DIR / f"{name}.json"
     if not patch_path.exists():
-        raise FileNotFoundError(f"no stored patch {name!r} — apply it via patch_apply first")
-    evidence_path = EVIDENCE_DIR / f"{name}.jsonl"
-    if not evidence_path.exists():
-        raise RuntimeError(f"no trial evidence for {name!r} — run trial() with the patch active")
-    records = [json.loads(line) for line in
-               evidence_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    attempts = sum(r["attempts"] for r in records)
-    ok = sum(r["ok"] for r in records)
-    if ok == 0:
-        raise RuntimeError(f"evidence for {name!r} is all failures ({attempts} attempts) — not promotable")
+        raise FileNotFoundError(f"no stored patch {name!r} — run gap_to_proof first")
+    proof_dir = EVIDENCE_DIR / name
+    manifest_path = proof_dir / "manifest.json"
+    if not manifest_path.exists():
+        raise RuntimeError(f"no gap_to_proof bundle for {name!r}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("schema") != "qw-gap-proof-manifest/1" or manifest.get("partial") is not False:
+        raise RuntimeError(f"gap_to_proof bundle for {name!r} is partial or invalid")
+    required = {"gaps.json", "patch.json", "ab.json", "provenance.json"}
+    listed = {entry.get("file"): entry.get("sha256") for entry in manifest.get("files") or []}
+    missing = required - set(listed)
+    if missing:
+        raise RuntimeError(f"gap_to_proof bundle missing: {', '.join(sorted(missing))}")
+    for filename in sorted(required):
+        path = proof_dir / filename
+        actual = hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
+        if actual != listed[filename]:
+            raise RuntimeError(f"gap_to_proof bundle SHA mismatch: {filename}")
+
+    ab = json.loads((proof_dir / "ab.json").read_text(encoding="utf-8"))
+    attempts = ab.get("attempts")
+    if (ab.get("schema") != "qw-gap-proof-ab/1" or not isinstance(attempts, list)
+            or not attempts):
+        raise RuntimeError("gap_to_proof A/B evidence is invalid")
+    for row in attempts:
+        before = row.get("baseline") if isinstance(row, dict) else None
+        after = row.get("patched") if isinstance(row, dict) else None
+        before_valid = (before is None
+                        or (isinstance(before, dict)
+                            and {"elapsed", "streak"} <= set(before)))
+        after_valid = (after is None
+                       or (isinstance(after, dict)
+                           and {"elapsed", "streak"} <= set(after)))
+        if (not isinstance(row, dict) or (before is None and after is None)
+                or not before_valid or not after_valid or "delta_s" not in row):
+            raise RuntimeError("gap_to_proof A/B evidence lacks per-attempt elapsed/streak/delta")
+
+    proof_provenance = json.loads(
+        (proof_dir / "provenance.json").read_text(encoding="utf-8"))
+    if proof_provenance.get("schema") != "qw-gap-proof-provenance/1":
+        raise RuntimeError("gap_to_proof provenance evidence is invalid")
+    for key in ("graph_sha", "patch_sha", "bsp_sha"):
+        value = proof_provenance.get(key)
+        try:
+            valid_sha = isinstance(value, str) and len(value) == 64 and int(value, 16) >= 0
+        except ValueError:
+            valid_sha = False
+        if not valid_sha:
+            raise RuntimeError(f"gap_to_proof provenance lacks valid {key}")
+    readbacks = proof_provenance.get("cvar_readback") or {}
+    for side in ("baseline", "patched"):
+        if not set(TRIAL_CVARS) <= set(readbacks.get(side) or {}):
+            raise RuntimeError(f"gap_to_proof provenance lacks {side} cvar readback")
+
+    baseline = ab.get("baseline") or {}
+    patched = ab.get("patched") or {}
+    streak_target = int((ab.get("route") or {}).get("streak_target", 5))
+    patched_streak = int(patched.get("streak_max", 0))
+    if baseline.get("streak_max") is None:
+        raise RuntimeError("gap_to_proof A/B evidence lacks baseline streak")
+    if patched.get("passed") is not True or patched_streak < streak_target:
+        raise RuntimeError(
+            f"patched streak {patched_streak}/{streak_target} did not pass; not promotable")
+
     patch = json.loads(patch_path.read_text(encoding="utf-8"))
+    proof_patch = json.loads((proof_dir / "patch.json").read_text(encoding="utf-8"))
+    if patch != proof_patch:
+        raise RuntimeError("stored patch differs from the SHA-verified proof patch")
     PROMOTE_DIR.mkdir(parents=True, exist_ok=True)
     artifact = PROMOTE_DIR / f"{map}-{name}.json"
     artifact.write_text(json.dumps({
         **patch,
         "provenance": {**(patch.get("provenance") or {}),
                        "promoted_by": "qw-fasttrack",
-                       "evidence": {"trials": len(records), "attempts": attempts, "ok": ok,
-                                    "file": f"{map}-{name}-evidence.jsonl"}},
+                       "evidence": {
+                           "schema": "qw-gap-proof-manifest/1",
+                           "bundle": f"{map}-{name}-proof",
+                           "baseline_streak": baseline["streak_max"],
+                           "patched_streak": patched_streak,
+                           "streak_target": streak_target,
+                       }},
     }, indent=1), encoding="utf-8")
-    shutil.copy2(evidence_path, PROMOTE_DIR / f"{map}-{name}-evidence.jsonl")
+    promoted_proof = PROMOTE_DIR / f"{map}-{name}-proof"
+    shutil.copytree(proof_dir, promoted_proof, dirs_exist_ok=True)
     handoff = PROMOTE_DIR / f"{map}-{name}-handoff.md"
     handoff.write_text(f"""# Nav-patch hand-off: {map} / {name}
 
-Bevisad i qw-fasttrack: **{ok}/{attempts} arrived** over {len(records)} trial run(s)
-(evidence: `{map}-{name}-evidence.jsonl`, per-attempt rows).
+Bevisad i qw-fasttrack med Trial v2 A/B: patchad streak
+**{patched_streak}/{streak_target}** (baseline streak {baseline['streak_max']}).
+Komplett SHA-verifierad evidens: `{promoted_proof.name}/manifest.json`.
 
 - Patch: `{artifact.name}` (schema qw-nav-patch/1 — adds plantable via
   `planlink from takeoff to v_req` after setting any listed cvars).
 - Rule 11.2 clean: placement/target values only, no trajectories/inputs.
 - Planted links die on map restart: production servers need the plant in
-  their boot path (same replant pattern as fasttrack's server_up).
+their boot path (same replant pattern as fasttrack's server_up).
 
 Suggested next step: PR into the rtx-main lane per the 7-step owner route
 protocol (route -> corpus -> 20x zero-wall -> analyst -> nanos tests -> PR).
 """, encoding="utf-8")
-    return {"artifact": str(artifact), "evidence": {"trials": len(records),
-                                                    "attempts": attempts, "ok": ok},
+    return {"artifact": str(artifact),
+            "evidence": {"baseline_streak": baseline["streak_max"],
+                         "patched_streak": patched_streak,
+                         "streak_target": streak_target},
+            "proof_bundle": str(promoted_proof),
             "handoff": str(handoff),
             "commit_hint": f"git -C {ROUTE_LAB} add artifacts/nav-patches && "
-                           f"git -C {ROUTE_LAB} commit -m 'nav-patch: {map}/{name} ({ok}/{attempts})'"}
+                           f"git -C {ROUTE_LAB} commit -m 'nav-patch: {map}/{name} "
+                           f"(streak {patched_streak}/{streak_target})'"}

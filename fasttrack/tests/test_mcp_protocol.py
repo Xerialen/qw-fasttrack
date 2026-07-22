@@ -13,15 +13,18 @@ class McpProtocolTests(unittest.TestCase):
     def test_tools_list_contains_v0_eleven_plus_live_pair(self):
         response = mcp_server.respond({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
         names = [tool["name"] for tool in response["result"]["tools"]]
-        self.assertEqual(len(names), 16)
+        self.assertEqual(len(names), 17)
         self.assertEqual(set(names) - {"live_start", "live_stop", "demo_replay_start",
-                                       "demo_replay_stop", "missing_spec"}, {
+                                       "demo_replay_stop", "missing_spec", "gap_to_proof"}, {
             "server_up", "server_down", "server_status", "maps_list", "ctl",
             "patch_apply", "patch_clear", "trial", "demo_ingest", "promote", "graph_dump",
         })
         trial = next(tool for tool in response["result"]["tools"] if tool["name"] == "trial")
         self.assertTrue({"pass_time_s", "streak_target", "max_time_s", "attempts_cap"}
                         <= set(trial["inputSchema"]["properties"]))
+        proof = next(tool for tool in response["result"]["tools"]
+                     if tool["name"] == "gap_to_proof")
+        self.assertEqual(proof["inputSchema"]["required"], ["demo", "map", "seed", "route"])
 
 
 if __name__ == "__main__":

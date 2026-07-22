@@ -21,6 +21,10 @@ som äger en egen rtx-experimentserver i WSL:
   `server_up` (planterade länkar dör vid map-restart — nu osynligt).
 - `graph_dump` installerar live-grafen som Movement Lab-overlay och
   returnerar viewer-URL.
+- Alla producenter och konsumenter (`graph_dump`, `demo_ingest`, `live_start`,
+  `demo_replay_start`, `missing_spec`) använder nu EN kanonisk katalog:
+  `route-lab/qw-nav-viewer/overlays`, som 18089-sidecaren och trunk-proxyn
+  faktiskt servar. Viewer-worktreet är endast käll-/buildkatalog.
 
 ## Demo -> mesh -> produktion
 
@@ -40,8 +44,16 @@ som äger en egen rtx-experimentserver i WSL:
   `max_time_s` (8) och `attempts_cap` (30) ger konsekutiv streak-gate; fail
   nollställer streaken. JSONL-ledgern bär box/tidsgränser, graf-/patch-SHA,
   matchtag och readback av de tre förbjudna cvarerna plus `rtx_bot_bhop`.
+- **`gap_to_proof(demo, map, seed, route, name?)`** — ägd, tidsbegränsad
+  demo→gap→patch→bevis-kedja. Vägrar innan mutation om server- eller live-unit
+  redan kör; clean-bootar utan patch, dumpar G0, ingestar mot G0, kör Trial v2
+  A/B med exakt en `patch_apply`, och kör alltid `patch_clear` + ren restart
+  även vid timeout/cancellation. Evidensbunten innehåller gaps, patch,
+  per-försöks A/B (elapsed/streak/delta), graf-/patch-/BSP-proveniens och
+  cvar-readback, plus SHA-manifest; avbrutna körningar märks `partial:true`.
 - **`promote(name, map)`** — experiment -> produktion i ett kommando: vägrar
-  utan trial-bevis, skriver patch + proveniens + bevis till
+  utan komplett SHA-verifierad `gap_to_proof`-bunt och uppnådd patchad streak
+  (legacy `ok>0` räcker inte), skriver patch + hela A/B-beviset till
   `route-lab/artifacts/nav-patches/` och utkastar hand-off för orkestratorns
   PR-lane. Commit lämnas till operatören (hint returneras).
 
@@ -125,7 +137,7 @@ PATH=$HOME/.cargo/bin:$PATH nice -n 19 cargo build --release
 cd /mnt/c/Users/benya/projects/quakeworld/qw-fasttrack
 nice -n 19 python3 fasttrack/demo_replay.py \
   --demo /mnt/c/nQuake/qw/matchinfo/demos/xersng.qwd \
-  --graph /mnt/c/Users/benya/projects/quakeworld/route-lab-viewer-live/qw-nav-viewer/overlays/fasttrack-graph.json \
+  --graph /mnt/c/Users/benya/projects/quakeworld/route-lab/qw-nav-viewer/overlays/fasttrack-graph.json \
   --map dm3 --summary-only
 ```
 

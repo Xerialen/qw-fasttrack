@@ -158,7 +158,7 @@ with tempfile.TemporaryDirectory() as td:
         "cell_ids":[1,2],"link_ids":[9]}))
     core.PROMOTE_DIR = root
     core.VIEWER_WORKTREE = root
-    core.VIEWER_OVERLAYS = root
+    core.OVERLAYS_DIR = root / "overlays"
     (root / "overlays").mkdir()
     (root / "overlays" / "test-graph.json").write_bytes(graph_path.read_bytes())
     core._wsl_path = lambda value: value

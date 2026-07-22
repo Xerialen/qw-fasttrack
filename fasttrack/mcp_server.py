@@ -77,8 +77,16 @@ TOOLS = {
                                          a.get("graph"), float(a.get("min_link_dist", 96.0)),
                                          a.get("player")),
     },
+    "gap_to_proof": {
+        "desc": "Owned, ordered demo->gap->patch->A/B proof workflow. Aborts if the experiment server or live bridge unit is already active; then clean-boots, dumps G0, ingests against G0, runs Trial v2 before/after exactly one patch_apply, and always clears+restarts. Emits a SHA manifest and partial evidence on failure/cancellation. Args: demo, map, seed [x,y,z], required route {start,target,arrive_box,pass_time_s?,streak_target?}, name (optional).",
+        "schema": {"demo": "string", "map": "string", "seed": "array",
+                   "route": "object", "name": "string"},
+        "required": ["demo", "map", "seed", "route"],
+        "fn": lambda a: core.gap_to_proof(
+            a["demo"], a["map"], a["seed"], a["route"], a.get("name")),
+    },
     "promote": {
-        "desc": "Promote a proven patch to production: writes patch + provenance + trial evidence into route-lab artifacts/nav-patches/ and drafts a hand-off for the orchestrator PR lane. Refuses without recorded trial evidence (trial() writes the ledger). Args: name (stored patch name), map.",
+        "desc": "Promote a proven patch to production. Requires a complete gap_to_proof SHA-verified bundle whose patched Trial v2 passed its streak target; legacy ok>0 ledgers are insufficient. Copies patch + complete A/B proof bundle into route-lab artifacts/nav-patches/ and drafts a hand-off. Args: name, map.",
         "schema": {"name": "string", "map": "string"},
         "required": ["name", "map"],
         "fn": lambda a: core.promote(a["name"], a["map"]),

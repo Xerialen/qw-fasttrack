@@ -17,20 +17,21 @@ from live_bridge import (  # noqa: E402
 )
 
 
-GRAPH = Path("/mnt/c/Users/benya/projects/quakeworld/route-lab-viewer-live/qw-nav-viewer/overlays/fasttrack-graph.json")
+GRAPH = Path("/mnt/c/Users/benya/projects/quakeworld/route-lab/qw-nav-viewer/overlays/fasttrack-graph.json")
 
 
 class LinkAttributionTests(unittest.TestCase):
-    def test_recorded_sng_sequence_attributes_planted_link_once_per_attempt(self):
+    def test_recorded_sng_sequence_attributes_canonical_links_once_per_attempt(self):
         fixture = json.loads((HERE / "fixtures" / "sng_status_sequence.json").read_text())
         graph = GraphContract.load(GRAPH)
         state = Attribution()
         for sample in fixture["samples"]:
             if sample["cell"] is not None:
                 state.observe(sample["cell"], sample["t"], graph)
-        planted = fixture["planted_link_id"]
-        self.assertIn(planted, state.used_links)
-        self.assertEqual(list(sorted(state.used_links)).count(planted), 1)
+        planted = set(fixture["planted_link_ids"])
+        self.assertEqual(state.used_links, planted)
+        self.assertTrue(all(list(sorted(state.used_links)).count(link_id) == 1
+                            for link_id in planted))
         state.reset()
         self.assertEqual(state.used_links, set())
 

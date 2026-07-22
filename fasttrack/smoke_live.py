@@ -142,7 +142,7 @@ def main() -> int:
         # Attribution emits GRAPH-FILE link ids: resolve the jump's file-side
         # id(s) by endpoint proximity so the assertion is id-space-correct.
         graph = json.loads(
-            (core.VIEWER_OVERLAYS / "fasttrack-graph.json").read_text(encoding="utf-8"))
+            (core.OVERLAYS_DIR / "fasttrack-graph.json").read_text(encoding="utf-8"))
         takeoff, landing = PATCH["adds"][0]["takeoff"], PATCH["adds"][0]["to"]
 
         def _near(cell, point, tol=64.0):

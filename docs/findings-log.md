@@ -230,3 +230,109 @@ oracle intentionally cannot observe a mover's instantaneous live position.
 ### Follow-up
 Run the required independent Claude Phase 3 review. If accepted, proceed to P3
 and use the new grounding provenance in its proof bundle.
+
+## 2026-07-22 — Toolbox v2 Phase 4 / P3 gap_to_proof
+
+### Experiment
+Implement the approved rev-3 ordering as one MCP/core operation, prove the
+ownership and cleanup behavior entirely through mocked seams while another
+task owns port 27530, unify overlay I/O, and replace promotion's legacy `ok>0`
+gate with the complete A/B/streak evidence contract.
+
+### Result
+`gap_to_proof(demo, map, seed, route, name?)` checks `fasttrack-server` and
+`fasttrack-live-bridge` unit status before its first mutation. Once ownership
+is clear it removes only stale bridge state, clears the active patch, clean
+boots, dumps G0, ingests exactly against G0, runs Trial v2 baseline, calls
+`patch_apply` exactly once, runs Trial v2 patched, then always clears and
+restarts the map. SIGALRM-backed WSL bounds are 1800 s baseline boot, 180 s
+graph dump, 300 s ingest, 600 s per trial, and 60 s apply. The 5430 s overall
+deadline is measured from the original workflow start and reserves 1800 s for
+cleanup plus 30 s for evidence writing after the 3600 s work deadline, so no
+phase resets the total clock and restoration time cannot be consumed by work.
+
+The bundle contains `gaps.json`, `patch.json`, `ab.json`, and
+`provenance.json`, each bound by filename+SHA-256 in `manifest.json`.
+Per-attempt A/B rows include elapsed, outcome, streak and patched-minus-baseline
+delta (negative is faster). Provenance carries graph, active patch, BSP and
+probe SHAs/commits plus baseline/patched cvar readback. Interrupted and failed
+runs write whatever evidence exists with `partial:true`. `promote` verifies all
+four SHAs, requires baseline streak evidence and `patched.passed` with
+`streak_max >= streak_target`, checks that the stored patch equals the proof
+patch, and copies the whole bundle.
+
+### Evidence
+The exact requested WSL command passed 33 tests in 5.271 s. New tests use
+mocked units, server boot, graph dump, ingest, patch application and Trial v2;
+they cover server ownership abort, live-bridge ownership abort, ambiguous unit
+status fail-closed, exact ordering, middle-phase failure, partial marking,
+cancellation cleanup, promotion reject (including a SHA-valid empty A/B table),
+promotion accept, and MCP count 17. No real server/control call was made.
+
+Actual final terminal output:
+
+```text
+$ python3 -m unittest discover -s fasttrack/tests
+.................................
+----------------------------------------------------------------------
+Ran 33 tests in 5.271s
+
+OK
+```
+
+The route-lab T1 baseline is
+`docs/plans/2026-07-21-v1-baseline.txt` (71 lines including its start-SHA and
+header). The current route-lab status has 22 entries and does not equal that
+historical snapshot because concurrent work has legitimately changed or
+cleaned many pre-existing paths. The exact comparison reported these two
+current-only entries relative to T1:
+
+```text
+?? artifacts/nav-patches/
+?? qw-nav-viewer/overlays/xersng-oracle-graph.json
+BASELINE_COUNT=71 CURRENT_COUNT=22
+```
+
+Phase 4 never executed `graph_dump`, `demo_ingest`, or promotion against
+route-lab: all mutating seams were mocked, and the suite only read the existing
+canonical `fasttrack-graph.json`. Thus this task produced no route-lab
+working-tree delta; exact equality to the old T1 snapshot is explicitly not
+claimed under the concurrently evolving main worktree.
+
+### Deviation and correction
+The P3 spec text says overlay output should go to the isolated worktree. Phase
+2 review established that this is not the directory consumed by the canonical
+18089 sidecar and trunk proxy. The implementation therefore intentionally uses
+`route-lab/qw-nav-viewer/overlays` as the single canonical data directory for
+`graph_dump`, `demo_ingest`, `live_start`, `demo_replay_start`, and
+`missing_spec`; `VIEWER_WORKTREE` remains only the isolated source/build tree.
+This changes overlay data under route-lab main but does not change its source.
+
+The first full suite run then failed because the recorded SNG fixture still
+expected worktree link ID 50259. Inspection showed the same canonical graph
+traversal (cell 942→684) is represented by IDs 38040 and 38041. The fixture was
+updated to assert that canonical pair, after which all 33 tests passed. A
+syntax typo in the newly edited MCP-count test was also surfaced by the first
+focused invocation and corrected before the successful runs.
+
+The post-commit two-axis review found three contract gaps and two documentation
+gaps. They were corrected before handoff: ownership now accepts only exact
+`inactive` unit status (so `activating`, bus errors, and unknown states abort);
+promotion requires non-empty per-attempt elapsed/streak/delta rows plus valid
+graph/patch/BSP SHA-256 and both cvar readbacks; cleanup and evidence use the
+original total clock with reserved time. The actual test output and route-lab
+T1/current comparison were added here, and `current-stage` now names the
+canonical overlay exception instead of contradicting it. The unbounded
+non-SIGALRM fallback was removed: unsupported runtimes fail closed before a
+phase starts. The re-review then found that promotion overvalidated paired A/B
+rows even though baseline and patched streak trials normally have different
+attempt counts. Validation now accepts a missing side with `delta_s:null` while
+still requiring elapsed/streak on every side that exists; the successful
+promotion fixture includes this unpaired-row case.
+
+### Confidence and next step
+High for orchestration order, fail-closed ownership (including ambiguous unit
+states), bundle/promotion checks,
+and cleanup semantics at mocked seams. Real route performance is intentionally
+unmeasured because the server was externally owned. Next: independent Claude
+review of the Phase 4 commit, then a real proof run only after 27530 is free.
