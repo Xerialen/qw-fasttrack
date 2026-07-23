@@ -297,8 +297,12 @@ class LiveBridge:
         self.stop_event = asyncio.Event()
 
     async def connect_upstream(self) -> None:
+        # ra_trial_result-event bär upp till 4096 samples (~350 KB på EN rad) —
+        # asyncios default-limit (64 KB) får readline att kasta ValueError och
+        # döda bryggan mitt i en gate-körning (2026-07-23 em: live-vyn dog för
+        # ägaren). 4 MiB rymmer värsta kända eventet med bred marginal.
         self._upstream_reader, self._upstream_writer = await asyncio.open_connection(
-            self.control_host, self.control_port
+            self.control_host, self.control_port, limit=4 * 1024 * 1024
         )
         self._reader_task = asyncio.create_task(self._upstream_loop(), name="control-reader")
 

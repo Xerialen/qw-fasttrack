@@ -92,7 +92,7 @@ def main() -> None:
                 streak_times = {s: [] for s in SCENARIOS}
             log_row(out, {"ts": time.time(), "phase": "complete", "attempt": attempt,
                           "scenario": scen, "pass": ok, "elapsed": elapsed,
-                          "reason": ev.get("reason"),
+                          "reason": ev.get("reason"), "waypoint_done": ev.get("waypoint_done"),
                           "wall_contacts": ev.get("wall_contacts"),
                           "peak_speed": ev.get("peak_speed"), "streak": streak})
             time.sleep(PAUSE_S)
@@ -128,6 +128,7 @@ def main() -> None:
             row = {"ts": time.time(), "phase": mode, "attempt": attempt,
                    "scenario": scen, "pass": passed, "elapsed": elapsed,
                    "target": round(target, 3), "reason": ev.get("reason"),
+                   "waypoint_done": ev.get("waypoint_done"),
                    "wall_contacts": ev.get("wall_contacts"),
                    "peak_speed": ev.get("peak_speed"), "fails_in_row": fails}
             if confirm is not None:
