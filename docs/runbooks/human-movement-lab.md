@@ -139,11 +139,26 @@ visualiseras (overlay/replay är review-ytor).
 - **Fler trial-scenarier (2026-07-23 kväll)**: `ra_trial`-verbet har utöver
   RA-scenarierna även `sng_mega_w`/`sng_mega_s` — exakta SNG-tele-spawnsen
   (-880,-232,-16)/(-632,-680,-16) → SNG-megan (-720,80,160), hälsobaserad
-  pickup-signal (≥199 hp + SUPERHEALTH + trigger konsumerad). Planned-drop-
-  förbudet gäller bara RA-klättringen; mega-rutten får routa över planerade
-  drops (fall >56u/stall 1s failar fortfarande). Driver med baselineprotokoll:
-  `scripts/mega_gate.py <bot>` (completion 5/5 → rekordjakt → bekräfta 5/5 =
-  ny baseline → 30 raka missar ⇒ senaste baseline).
+  pickup-signal (>100 hp + SUPERHEALTH + trigger konsumerad; INTE ≥199 —
+  mega ger +100 från aktuell hälsa). Scenarierna tvingar dessutom en
+  **waypoint**: 10-raketpaketet (-752,464,96) måste plockas FÖRE megan
+  (ägarkrav; målväxling vid autentisk pickup, ammo 0→10 + trigger).
+  Planned-drop-förbudet gäller bara RA-klättringen. Driver:
+  `scripts/mega_gate.py <bot>` (baselineprotokollet).
+- **Plantfysik (dyraste lärdomen 2026-07-23 kväll)**: en planterad
+  speedjumps flygsträcka är ALLTID v_req × lufttid (0.675 s flatt, kortare
+  uppåt) oavsett var 'to' pekar — landningspunkten styr bara pursuit-
+  riktningen. Räkna geometrin BAKLÄNGES (gap/lufttid = v_req); mikrohopp
+  <200u går inte att bygga som plants. Sikta översskjutet LÄNGS
+  färdriktningen (djup landningsyta), aldrig mot en vägg.
+- **Kedjerestriktion**: en plant vars källcell = föregående plants
+  landningscell planeras aldrig av liveplaneraren. Lägg nästa plants
+  källcell en cell bort längs bottens naturliga utrullning.
+- **Engagemangsriktning**: exekutorn engagerar en plants runway i bottens
+  AKTUELLA rörelseriktning — lägg from-cellen där botten naturligt passerar
+  i rätt riktning (P2-lärdomen: fel placering ⇒ vändning i het fart vid
+  void-kant). Ägarens kurvor diskretiseras som markväng på runwayn + max
+  ~25° kink vid lippen.
 
 ## Metodlärdomar (dyraste felen 2026-07-23 — läs INNAN du felsöker routing)
 
