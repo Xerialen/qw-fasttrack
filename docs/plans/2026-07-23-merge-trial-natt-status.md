@@ -1,15 +1,24 @@
-# Merge-trial nattkörning 2026-07-23 — SLUTFÖRD ✅ (03:15)
+# Merge-trial nattkörning 2026-07-23 — mergen KLAR; rutt A grön, RA-spawn ÖPPEN (rättad 04:00)
 
-**MÅLDOM: BÅDA GATERNA GRÖNA på slutbuilden `4cdf7912` (commit `f2a0b27`,
-pushad till `fork/merge-trial`).**
+**Slutbuild `4cdf7912` (commit `f2a0b27`, pushad till `fork/merge-trial`).**
 
-- **Lifts→SNG 10/10** (fasttrack-riggen 27530, kall boot): 3.110–3.174 s
+- **Lifts→SNG 10/10 ✅** (fasttrack-riggen 27530, kall boot): 3.110–3.174 s
   (krav ≤3.82; certifierat före mergen 3.63–3.71; människan 3.18 —
   mergeboten går i människofart). Evidens: focusroute.jsonl sista raden.
-- **RA-tunnel→RA-topp 10/10** (route-labs RA-rigg 27504/27954, local-
-  scenariot = tunnel→topp): 2.11–2.12 s (korpusmediangate 2.435), 0
-  väggkontakter, parity dj/wj/elev/gren/grapple/rjump/ledgecap =
-  0/0/1/0/0/0/0. Evidens: route-lab/artifacts/dm3-ra-local-merge-4cdf7912.jsonl.
+- **RÄTTELSE (ägarfråga 03:50):** nattens "gate 3 grön" var **local-
+  scenariot = ENBART sista hoppet** (start övre lippen 360,−677,264 →
+  RA-toppen; människomedian 2.435 s) — INTE tunnel→topp. Det gick
+  10/10 @ 2.11–2.12 s, 0 väggkontakter, inget rocketjump
+  (rtx_bot_rocketjump 0 i parity). **Ägarmålet tunnel→topp =
+  ra_spawn-scenariot (spawnen 192,−208,−176 → toppen; median 12.516) och
+  det är RÖTT: 28/30 deterministisk 12.68 s plat-väntlinje + väggkontakt,
+  2/30 snabbförsök som faller.** Kontrollmätt: deras rena HEAD 3222689 är
+  också rött på samma sätt i alla inatt tillgängliga miljöer —
+  uppströms HEAD-läge, inte merge-regression. Cert-miljön (40/40) ligger
+  på förbjudna B-slotten 27506/27956 (orörd).
+- **Webbdemo (ägarbeställd):** 6 ra_spawn-försök (4× 12.68-linjen, 1
+  wall_push, 1 stall) + 3 local-hopp (2.12) på merge-builden:
+  `http://192.168.86.33:8095/demo-player/?demoUrl=/demos/files/non-games/xerbot/xerbot-ra-spawn-merge.mvd&map=dm3&from=1`
 - cargo test 709/709. Rutt B:s tre live-planteringar återplanterade
   (routeb-wip, 3 adds OK) — status quo för morgondagens exekutorlane.
 - OBS ra_spawn-scenariot (HELA spawn→RA, median 12.516) är RÖTT på både
