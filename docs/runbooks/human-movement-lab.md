@@ -137,6 +137,34 @@ visualiseras (overlay/replay är review-ytor).
   ra_trial via proxyn (bryggan behåller sin kanal). Stora resultatevent
   (≤4096 samples) kan blockera kanalen i sekunder — generösa timeouts.
 
+## Metodlärdomar (dyraste felen 2026-07-23 — läs INNAN du felsöker routing)
+
+1. **Instrumentera före teorin.** Varje rotorsak i dag kom ur ett live-
+   instrument — `penalties <bot>` (straffbilden mid-run), samples-kolumnerna
+   route_pos/link i ra_trial-resultatet, `initial_route`, unlink-felsvaret
+   som motorprobe. INGEN kom ur kostnadsaritmetik. Timmar brändes på att
+   räkna på dump-kostnader; produktionsprissättningen (banded + hazard +
+   straff + jitter) syns inte i dumpen. Offline-Dijkstra på dumpen används
+   för EXISTENS/FORM-frågor ("finns speedjump-fri väg?"), aldrig för
+   "varför valde routern X".
+2. **Grafredigerings-okänslighet = kodlane-signal.** Om trajektoria och
+   tider är IDENTISKA efter en edit som borde ha påverkat (t.ex. borttag av
+   länken beteendet ser ut att använda), sluta omedelbart med mesh-kirurgi —
+   beteendet ägs av exekutor/pursuit-kod. Verifierat brutalt: 8688 + alla
+   hyllhopp borttagna → exakt samma fall på hundradelen.
+3. **Enumerera hela geometrifamiljen före borttag.** Nativa emissioner har
+   tvillingar och dubbletter (41448/41449; 41166:s grannar). En-länk-i-taget
+   blir whack-a-mole med en hel replan-cykel per varv. Sök på geometri-
+   fönster (källcell-band → målcell-band), granska listan, ta klassen.
+4. **Instrument är läges-bundna.** `route <bot>` visar stale/annan rutt
+   medan ra_trial kör (item-trialen har eget ruttobjekt). Validera
+   instrumentet i aktuellt läge innan du drar slutsatser ur det.
+5. **Boka aldrig ett resultat utan omstartsverifiering.** Dagens "6/6 @
+   11.39" var delvis villkorat av timmars ackumulerat straffminne och kom
+   inte tillbaka efter omstart (blev 7/8 @ 11.6–11.9 + en hot-entry-krasch
+   tills även de heta pit-hoppen kuraterats bort). Gate-siffror bokförs
+   ENDAST från färskt omstartat tillstånd.
+
 ## Se även
 
 - `docs/runbooks/qwd-till-gron-rutt.md` — från qwd till certifierad rutt
