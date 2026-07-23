@@ -1,5 +1,41 @@
 # Findings Log
 
+## 2026-07-23 — STÄNGD (samma dag): bryggan uppgraderad till server-side push
+
+77 Hz-polling avfördes (RTT kvantiseras till frame-gränser; polling ser
+tillstånd, inte händelser). I stället byggdes alternativ B ur utredningen:
+`rtx_telemetry`-cvar + ett `pmove`-event per serverframe från librtx
+(auktoritativ FL_ONGROUND, full 3D-velocity, ground-entity; tomt event =
+heartbeat), brygga i `--push`-läge (inga cell-RTT:er, lokal cellmatchning,
+JSONL-inspelning, 15 Hz WS-decimering, 5 s poll-fallback) och ingest-adapter
+`load_samples_jsonl` med auktoritativ markmask. Bygge: sol; review+heartbeat-
+fix: claudette. Mätgrind 2026-07-23 fm: ~10 min mänskligt spel, 0 luckor
+>50 ms i strömmen, ingen laggrapport. Facit: qwd-behovet ersatt — RL-
+anflygningsspecen byggdes helt ur pmove-data samma förmiddag. Kvarvarande
+qwd-roll: fallback för gamla builds. Ursprunglig frågeställning nedan.
+
+## 2026-07-23 — ÖPPEN FRÅGA (LÖST, se ovan): uppgradera live-bryggan från 15 Hz till 77 Hz?
+
+### Experiment
+Ingen — ägarfråga under human-movement-lab-sessionen (bot-lös server 27530,
+`players[]` i status, människa monitorerad live). Ägarbeslut: logga för senare.
+
+### Result
+Bryggan (`live_bridge.py`) pollar `status` på 15 Hz och attribuerar position→cell
+per tick. Vid speed-jump-fart (~450 ups) är det ~30u/tick — fuzzy-matchningen
+(80u/56u-tolerans) kompenserar, men bryggan kan inte skatta v_req eller exakta
+takeoff-/landningspunkter; det kräver qwd-ingest (72/77 fps). Frågan: kan/bör
+bryggan uppgraderas till 77 Hz så live-fångst ger demo-klass precision och
+demosteget kan hoppas över i gap-analys-loopen?
+
+### Att utreda när det tas upp
+- Kontrollkanalens kostnad: `status` + N×`cell`-RTT per tick — klarar mvdsv-
+  syscallen 77 Hz utan att störa serverframen (bot-syscallen är blockande)?
+- Alternativ: server-side push (event-ström från librtx per frame) i stället
+  för polling — undviker RTT-multiplikationen helt.
+- Viewerns WS-lager och attribution-pipelinen är frekvensagnostiska; flaskhalsen
+  är enbart insamlingssidan.
+
 ## 2026-07-23 — ÖPPEN DISKREPANS: curl-mål-cvars (döda eller krävs?)
 
 ### Experiment

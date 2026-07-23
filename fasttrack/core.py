@@ -260,14 +260,16 @@ def server_up(map: str, bots: int = 1, lib: str | None = None) -> dict:
     _sh("systemd-run", "--user", "--collect", f"--unit={UNIT}",
         f"--working-directory={RUNTIME}", "--property=Nice=19", "--",
         str(RUNTIME / "mvdsv"), "-port", str(GAME_PORT), "+exec", "fasttrack.cfg")
-    ready = wait_ready()
+    ready = wait_ready(expect_bots=bots > 0)
     replant = replant_active_patch() if ACTIVE_PATCH.exists() else None
     return {"game": GAME_PORT, "control": CONTROL_PORT, "qtv": QTV_PORT,
             "map": map, "ready": ready, "replant": replant}
 
 
-def wait_ready(timeout_s: int = 1800) -> dict:
-    """Poll the control socket until navmesh=ready and a live bot exists."""
+def wait_ready(timeout_s: int = 1800, expect_bots: bool = True) -> dict:
+    """Poll the control socket until navmesh=ready and, when the server was
+    booted with bots, a live bot exists (expect_bots=False for a human-only
+    movement-lab server)."""
     deadline = time.monotonic() + timeout_s
     last_err = None
     while time.monotonic() < deadline:
@@ -276,7 +278,7 @@ def wait_ready(timeout_s: int = 1800) -> dict:
             try:
                 status = ctl.request("status")["data"]
                 bots = [b for b in status.get("bots", []) if b.get("alive")]
-                if status.get("navmesh") == "ready" and bots:
+                if status.get("navmesh") == "ready" and (bots or not expect_bots):
                     return {"navmesh": "ready", "bots": [b["ent"] for b in bots],
                             "cells": status.get("cells"), "links": status.get("links")}
             finally:
@@ -665,8 +667,13 @@ def _wait_for_state(timeout_s: float = 45.0) -> dict:
     raise TimeoutError("live bridge did not publish readiness state within 45s")
 
 
-def live_start(map: str, graph_name: str) -> dict:
-    """Start the single-owner bridge, then ensure the isolated viewer is served."""
+def live_start(map: str, graph_name: str, push: bool = False,
+               record: str | None = None) -> dict:
+    """Start the single-owner bridge, then ensure the isolated viewer is served.
+
+    push=True: authoritative per-frame pmove stream (needs a telemetry-capable
+    .so; falls back to poll mode after 5 s otherwise). record: append raw
+    pmove rows as JSONL — the durable evidence that replaces owner qwd:s."""
     if not _safe_overlay_name(graph_name):
         raise ValueError("graph_name must contain only ASCII letters, digits, '-' or '_'")
     graph = OVERLAYS_DIR / f"{graph_name}-graph.json"
@@ -677,12 +684,17 @@ def live_start(map: str, graph_name: str) -> dict:
 
     _remove_live_state()
     subprocess.run(["systemctl", "--user", "stop", LIVE_UNIT], capture_output=True)
-    _sh(
+    argv = [
         "systemd-run", "--user", "--collect", f"--unit={LIVE_UNIT}",
         f"--working-directory={FASTTRACK_DIR.parent}", "--property=Nice=19", "--",
         "python3", "-u", str(LIVE_BRIDGE), "--control", str(CONTROL_PORT),
         "--graph", str(graph), "--ws-port", "8093", "--proxy-port", "27981",
-    )
+    ]
+    if push:
+        argv.append("--push")
+    if record is not None:
+        argv += ["--record", str(record)]
+    _sh(*argv)
     state = _wait_for_state()
 
     viewer_started = False

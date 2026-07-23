@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
@@ -12,6 +14,7 @@ sys.path.insert(0, str(HERE.parent))
 from live_bridge import (  # noqa: E402
     Attribution,
     GraphContract,
+    GraphMatcher,
     LiveBridge,
     _next_unresolved_streak,
 )
@@ -53,6 +56,100 @@ class LinkAttributionTests(unittest.TestCase):
             prev_z = z
             stamped |= streak >= 3
         self.assertFalse(stamped)
+
+
+class PushPmoveTests(unittest.IsolatedAsyncioTestCase):
+    async def test_authoritative_one_frame_contact_is_recorded_and_attributed_locally(self):
+        graph = GraphContract(
+            path=Path("fixture.json"),
+            name="fixture",
+            sha256="abc",
+            cells=[[0, 0, 0], [100, 0, 0], [200, 0, 0]],
+            links=[[0, 1, "JumpGap", 0.2], [1, 2, "JumpGap", 0.2]],
+            cell_ids=[10, 20, 30],
+            link_ids=[101, 102],
+            links_by_cells={(10, 20): (101,), (20, 30): (102,)},
+            cell_z_by_id={10: 0.0, 20: 0.0, 30: 0.0},
+            cell_by_id={10: [0, 0, 0], 20: [100, 0, 0], 30: [200, 0, 0]},
+        )
+        self.assertEqual(GraphMatcher(graph).resolve([101, 1, 0]), 20)
+        with tempfile.TemporaryDirectory() as td:
+            record = Path(td) / "pmove.jsonl"
+            bridge = LiveBridge(graph, record_path=record, push=True)
+            bridge.request = mock.AsyncMock(side_effect=AssertionError("push must not poll"))
+            events = [
+                (0.000, [0, 0, 0], [320, 0, 0], True),
+                (0.130, [50, 0, 40], [380, 0, 120], False),
+                (0.260, [100, 0, 0], [450, 0, 0], True),
+                (0.390, [150, 0, 40], [470, 0, 120], False),
+                (0.520, [200, 0, 0], [480, 0, 0], True),
+            ]
+            for server_time, origin, velocity, on_ground in events:
+                await bridge._route_event({
+                    "ev": "pmove",
+                    "t": server_time,
+                    "players": [{
+                        "ent": 1,
+                        "origin": origin,
+                        "vel": velocity,
+                        "on_ground": on_ground,
+                        "ground_ent": 0 if on_ground else -1,
+                    }],
+                })
+
+            state = bridge.attribution[1]
+            self.assertEqual(state.used_cells, {10, 20, 30})
+            self.assertEqual(state.used_links, {101, 102})
+            assert bridge.last_frame is not None
+            self.assertEqual(bridge.last_frame["schema"], "qw-live-frame/1")
+            self.assertEqual(bridge.last_frame["bots"][0]["cell_id"], 30)
+            rows = [json.loads(line) for line in record.read_text().splitlines()]
+            self.assertEqual(len(rows), 5)
+            self.assertEqual(rows[2], {
+                "t": 0.260,
+                "ent": 1,
+                "origin": [100.0, 0.0, 0.0],
+                "vel": [450.0, 0.0, 0.0],
+                "on_ground": True,
+                "ground_ent": 0,
+            })
+            bridge.request.assert_not_awaited()
+
+    async def test_empty_players_heartbeat_keeps_push_alive(self):
+        # Bridge started before the human connects: the build's empty pmove
+        # event is liveness proof — the watchdog must NOT fall back to poll.
+        graph = GraphContract(
+            path=Path("fixture.json"), name="fixture", sha256="abc", cells=[],
+            links=[], cell_ids=[], link_ids=[], links_by_cells={},
+            cell_z_by_id={}, cell_by_id={},
+        )
+        bridge = LiveBridge(graph, push=True)
+        bridge.request = mock.AsyncMock(side_effect=AssertionError("no control traffic expected"))
+        await bridge._route_event({"ev": "pmove", "t": 0.0, "players": []})
+        self.assertTrue(bridge._pmove_seen.is_set())
+        with mock.patch("live_bridge.PUSH_FALLBACK_S", 0.01):
+            await bridge._push_watchdog()
+        self.assertTrue(bridge.push_active)
+        assert bridge.last_frame is not None
+        self.assertEqual(bridge.last_frame["bots"], [])
+        bridge.request.assert_not_awaited()
+
+    async def test_missing_pmove_for_five_second_window_falls_back_to_poll(self):
+        graph = GraphContract(
+            path=Path("fixture.json"), name="fixture", sha256="abc", cells=[],
+            links=[], cell_ids=[], link_ids=[], links_by_cells={},
+            cell_z_by_id={}, cell_by_id={},
+        )
+        bridge = LiveBridge(graph, push=True)
+        bridge.request = mock.AsyncMock(return_value={"ok": True})
+        with (
+            mock.patch("live_bridge.PUSH_FALLBACK_S", 0.01),
+            self.assertLogs("fasttrack.live_bridge", level="WARNING") as logs,
+        ):
+            await bridge._push_watchdog()
+        self.assertFalse(bridge.push_active)
+        bridge.request.assert_awaited_once_with("set rtx_telemetry 0", timeout=2.0)
+        self.assertTrue(any("falling back to poll mode" in line for line in logs.output))
 
 
 class ProxyRoutingTests(unittest.IsolatedAsyncioTestCase):

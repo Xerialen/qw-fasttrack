@@ -34,40 +34,13 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import demo_mesh  # noqa: E402
 from ground_oracle import GroundOracle, OracleUnavailable, heuristic_evidence  # noqa: E402
-from live_bridge import Attribution, GraphContract, _ws_frame  # noqa: E402
+from live_bridge import Attribution, GraphContract, GraphMatcher, _ws_frame  # noqa: E402
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 TICK_HZ = 20.0
-CELL_XY = 24.0
-CELL_Z = 40.0
 MISS_SNAP = 32.0
 MAX_CLIENT_MESSAGE = 1024
 LOG = logging.getLogger("fasttrack.demo_replay")
-
-
-class GraphMatcher:
-    """Offline point->cell resolution against the graph file (no server)."""
-
-    def __init__(self, graph: GraphContract):
-        self.graph = graph
-        self.columns: dict[tuple[int, int], list[int]] = {}
-        for index, cell in enumerate(graph.cells):
-            key = (math.floor(cell[0] / 32.0), math.floor(cell[1] / 32.0))
-            self.columns.setdefault(key, []).append(index)
-
-    def resolve(self, point) -> int | None:
-        cx, cy = math.floor(point[0] / 32.0), math.floor(point[1] / 32.0)
-        best, best_d = None, None
-        for dx in (-1, 0, 1):
-            for dy in (-1, 0, 1):
-                for index in self.columns.get((cx + dx, cy + dy), ()):
-                    cell = self.graph.cells[index]
-                    if (abs(cell[0] - point[0]) <= CELL_XY and abs(cell[1] - point[1]) <= CELL_XY
-                            and abs(cell[2] - point[2]) <= CELL_Z):
-                        d = (cell[0] - point[0]) ** 2 + (cell[1] - point[1]) ** 2
-                        if best_d is None or d < best_d:
-                            best, best_d = self.graph.cell_ids[index], d
-        return best
 
 
 def build_timeline(demo_path: str, graph: GraphContract, player: int | None = None,

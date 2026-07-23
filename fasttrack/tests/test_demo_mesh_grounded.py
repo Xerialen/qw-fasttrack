@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
-from demo_mesh import grounded_mask  # noqa: E402
+from demo_mesh import extract, grounded_mask, load_samples_jsonl  # noqa: E402
 
 
 def jump_samples(fps: float = 72.0) -> tuple[list[tuple], range, range, range]:
@@ -73,6 +75,44 @@ class GroundedMaskTests(unittest.TestCase):
 
     def test_isolated_sample_is_not_ground(self):
         self.assertEqual(grounded_mask([(0.0, 0.0, 0.0, 56.0, 0.0)]), [False])
+
+    def test_authoritative_single_frame_rim_contact_splits_chain_jump(self):
+        dt = 0.013
+        rows = []
+
+        def add(index, x, z, speed, on_ground):
+            rows.append({
+                "t": round(index * dt, 3),
+                "ent": 7,
+                "origin": [float(x), 0.0, float(z)],
+                "vel": [float(speed), 0.0, 0.0],
+                "on_ground": on_ground,
+                "ground_ent": 0 if on_ground else -1,
+            })
+
+        for index in range(10):
+            add(index, 0, 0, 320, True)
+        for offset, z in enumerate((12, 22, 30, 36, 40, 42, 40, 36, 30, 22, 12, 6), 10):
+            add(offset, (offset - 9) * (100 / 13), z, 400, False)
+        add(22, 100, 0, 450, True)  # the only 13 ms rim-contact sample
+        for offset, z in enumerate((12, 22, 30, 36, 40, 42, 40, 36, 30, 22, 12, 6), 23):
+            add(offset, 100 + (offset - 22) * (120 / 13), z, 480, False)
+        for index in range(35, 45):
+            add(index, 220, 0, 0, True)
+
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "chain-jump.jsonl"
+            path.write_text(
+                "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+            samples, authoritative = load_samples_jsonl(path, ent=7)
+
+        masked = extract(samples, authoritative_mask=authoritative)
+        heuristic = extract(samples)
+        self.assertEqual(len(masked["jumps"]), 2)
+        self.assertEqual([jump["speed_median"] for jump in masked["jumps"]], [320.0, 450.0])
+        self.assertEqual(len(heuristic["jumps"]), 1)
 
 
 if __name__ == "__main__":

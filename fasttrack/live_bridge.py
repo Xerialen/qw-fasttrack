@@ -12,6 +12,7 @@ import base64
 import hashlib
 import json
 import logging
+import math
 import os
 import secrets
 import signal
@@ -25,6 +26,8 @@ from typing import Any
 
 LOG = logging.getLogger("fasttrack.live_bridge")
 MISSING_GROUND_DZ_TOL = 2.0
+PUSH_FALLBACK_S = 5.0
+PUSH_BROADCAST_HZ = 15.0
 STATE_FILE = Path.home() / ".local" / "share" / "qw-fasttrack" / "live-bridge.json"
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 TERMINAL_EVENTS = {"arrived", "goto_stall"}
@@ -118,6 +121,37 @@ class GraphContract:
             cell_z_by_id={int(cid): float(cell[2]) for cid, cell in zip(cell_ids, cells, strict=True)},
             cell_by_id={int(cid): cell for cid, cell in zip(cell_ids, cells, strict=True)},
         )
+
+
+class GraphMatcher:
+    """Resolve world points against a graph file without control requests."""
+
+    CELL_XY = 24.0
+    CELL_Z = 40.0
+
+    def __init__(self, graph: GraphContract):
+        self.graph = graph
+        self.columns: dict[tuple[int, int], list[int]] = {}
+        for index, cell in enumerate(graph.cells):
+            key = (math.floor(cell[0] / 32.0), math.floor(cell[1] / 32.0))
+            self.columns.setdefault(key, []).append(index)
+
+    def resolve(self, point) -> int | None:
+        cx, cy = math.floor(point[0] / 32.0), math.floor(point[1] / 32.0)
+        best, best_d = None, None
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for index in self.columns.get((cx + dx, cy + dy), ()):
+                    cell = self.graph.cells[index]
+                    if (
+                        abs(cell[0] - point[0]) <= self.CELL_XY
+                        and abs(cell[1] - point[1]) <= self.CELL_XY
+                        and abs(cell[2] - point[2]) <= self.CELL_Z
+                    ):
+                        distance = (cell[0] - point[0]) ** 2 + (cell[1] - point[1]) ** 2
+                        if best_d is None or distance < best_d:
+                            best, best_d = self.graph.cell_ids[index], distance
+        return best
 
 
 @dataclass
@@ -218,9 +252,13 @@ class LiveBridge:
         proxy_port: int = 27981,
         control_host: str = "127.0.0.1",
         record_path: Path | None = None,
+        push: bool = False,
     ) -> None:
         self.graph = graph
+        self.graph_matcher = GraphMatcher(graph)
         self.record_path = record_path
+        self.push_requested = push
+        self.push_active = push
         self.control_host = control_host
         self.control_port = control_port
         self.requested_ws_port = ws_port
@@ -234,6 +272,7 @@ class LiveBridge:
         self._upstream_writer: asyncio.StreamWriter | None = None
         self._reader_task: asyncio.Task[None] | None = None
         self._telemetry_task: asyncio.Task[None] | None = None
+        self._push_watchdog_task: asyncio.Task[None] | None = None
         self._proxy_server: asyncio.AbstractServer | None = None
         self._ws_server: asyncio.AbstractServer | None = None
         self._send_lock = asyncio.Lock()
@@ -252,6 +291,9 @@ class LiveBridge:
         self.tick_ms: list[float] = []
         self.ws_send_ms: list[float] = []
         self.last_frame: dict[str, Any] | None = None
+        self._last_broadcast_seq = 0
+        self._pmove_seen = asyncio.Event()
+        self._player_names: dict[int, str] = {}
         self.stop_event = asyncio.Event()
 
     async def connect_upstream(self) -> None:
@@ -307,6 +349,10 @@ class LiveBridge:
         await client.send(outgoing)
 
     async def _route_event(self, message: dict[str, Any]) -> None:
+        if message.get("ev") == "pmove":
+            if self.push_active and self._consume_pmove(message):
+                self._pmove_seen.set()
+            return
         if message.get("ev") in TERMINAL_EVENTS:
             bot = message.get("bot")
             owner = self.goto_owner.pop(int(bot), None) if bot is not None else None
@@ -318,6 +364,96 @@ class LiveBridge:
             *(client.send(message) for client in tuple(self.proxy_clients) if client.connected),
             return_exceptions=True,
         )
+
+    def _consume_pmove(self, message: dict[str, Any]) -> bool:
+        """Consume one authoritative server frame and build the latest viewer frame."""
+        try:
+            server_time = float(message["t"])
+            players = message["players"]
+            if not isinstance(players, list):
+                raise TypeError("players is not a list")
+        except (KeyError, TypeError, ValueError):
+            LOG.warning("discarding malformed pmove event: %r", message)
+            return False
+
+        actors_out = []
+        record_stream = (
+            self.record_path.open("a", encoding="utf-8")
+            if self.record_path is not None
+            else None
+        )
+        try:
+            for raw_player in players:
+                try:
+                    ent = int(raw_player["ent"])
+                    position = [float(value) for value in raw_player["origin"]]
+                    velocity = [float(value) for value in raw_player["vel"]]
+                    on_ground = raw_player["on_ground"]
+                    ground_ent = int(raw_player.get("ground_ent", -1))
+                    if len(position) != 3 or len(velocity) != 3 or not isinstance(on_ground, bool):
+                        raise ValueError("bad pmove player shape")
+                except (KeyError, TypeError, ValueError):
+                    LOG.warning("discarding malformed pmove player: %r", raw_player)
+                    continue
+
+                if record_stream is not None:
+                    record_stream.write(json.dumps({
+                        "t": server_time,
+                        "ent": ent,
+                        "origin": position,
+                        "vel": velocity,
+                        "on_ground": on_ground,
+                        "ground_ent": ground_ent,
+                    }, separators=(",", ":")) + "\n")
+
+                state = self.attribution.setdefault(ent, Attribution())
+                aux = self._actor_aux.setdefault(
+                    ent,
+                    {"last_ground_pos": None, "airborne_from": None, "airborne_point": None},
+                )
+                resolved = self.graph_matcher.resolve(position) if on_ground else None
+                if on_ground:
+                    if resolved is None:
+                        state.note_missing_ground(position)
+                    else:
+                        if (
+                            aux["airborne_from"] is not None
+                            and aux["airborne_from"] != resolved
+                            and not (
+                                self.graph.links_by_cells.get((aux["airborne_from"], resolved), ())
+                                or self.graph.fuzzy_links(aux["airborne_from"], resolved)
+                            )
+                        ):
+                            state.note_missing_traversal(aux["airborne_point"], position)
+                        state.observe(resolved, server_time, self.graph)
+                    aux["airborne_from"] = None
+                    aux["airborne_point"] = None
+                    aux["last_ground_pos"] = list(position)
+                elif aux["airborne_from"] is None and state.last_cell is not None:
+                    aux["airborne_from"] = state.last_cell
+                    aux["airborne_point"] = aux["last_ground_pos"] or list(position)
+
+                actors_out.append({
+                    "ent": ent,
+                    "pos": position,
+                    "speed": math.hypot(velocity[0], velocity[1]),
+                    "cell_id": resolved if resolved is not None else state.last_cell,
+                    "used": {
+                        "cells": sorted(state.used_cells),
+                        "links": sorted(state.used_links),
+                    },
+                    "missing": state.missing_payload(),
+                    "human": True,
+                    "name": self._player_names.get(ent),
+                })
+        finally:
+            if record_stream is not None:
+                record_stream.close()
+        # An empty players array is the build's telemetry heartbeat (bridge
+        # started before the human connected). Build the frame anyway so the
+        # viewer/probes see the same steady empty frames poll mode always sent.
+        self.last_frame = self._make_frame(actors_out)
+        return True
 
     async def _allocate(self, pending: Pending, command: str) -> int:
         assert self._upstream_writer is not None
@@ -451,6 +587,51 @@ class LiveBridge:
         await self._spot_check()
         return data
 
+    def _remember_player_names(self, status: dict[str, Any]) -> None:
+        self._player_names = {
+            int(player["ent"]): str(player.get("name") or "")
+            for player in (status.get("players") or [])
+            if "ent" in player
+        }
+
+    async def _enable_push(self) -> None:
+        try:
+            reply = await self.request("set rtx_telemetry 1", timeout=3.0)
+            if reply.get("ok") is not True:
+                raise RuntimeError(str(reply))
+        except (ConnectionError, RuntimeError, TimeoutError) as error:
+            self.push_active = False
+            LOG.warning("could not enable pmove push; falling back to poll mode: %s", error)
+            return
+        self.push_active = True
+        self._push_watchdog_task = asyncio.create_task(
+            self._push_watchdog(), name="pmove-push-watchdog"
+        )
+
+    async def _disable_push(self) -> None:
+        self.push_active = False
+        try:
+            reply = await self.request("set rtx_telemetry 0", timeout=2.0)
+            if reply.get("ok") is not True:
+                LOG.warning("rtx_telemetry disable failed: %s", reply)
+        except (ConnectionError, TimeoutError):
+            LOG.warning("could not disable rtx_telemetry: control connection unavailable")
+
+    async def _push_watchdog(self) -> None:
+        try:
+            await asyncio.wait_for(self._pmove_seen.wait(), PUSH_FALLBACK_S)
+        except TimeoutError:
+            if not self.push_active:
+                return
+            LOG.warning(
+                "push mode requested but no pmove events arrived within %.0f s; "
+                "falling back to poll mode (older .so build?)",
+                PUSH_FALLBACK_S,
+            )
+            await self._disable_push()
+        except asyncio.CancelledError:
+            pass
+
     def _write_state(self) -> None:
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         state = {
@@ -481,6 +662,9 @@ class LiveBridge:
             self._ws_client, self.requested_ws_port
         )
         status = await self.readiness()
+        self._remember_player_names(status)
+        if self.push_requested:
+            await self._enable_push()
         self._write_state()
         self._telemetry_task = asyncio.create_task(self._telemetry_loop(), name="telemetry")
         LOG.info(
@@ -512,7 +696,12 @@ class LiveBridge:
         if status.get("ok") is not True:
             raise RuntimeError(f"status failed: {status}")
         bots_out = []
-        for bot in (status.get("data") or {}).get("bots", []):
+        data = status.get("data") or {}
+        # Human clients ride the same attribution pipeline as bots so a live
+        # player lights up used cells/links and the red missing layer.
+        actors = list(data.get("bots") or [])
+        actors += [dict(p, human=True) for p in (data.get("players") or [])]
+        for bot in actors:
             if not bot.get("alive"):
                 continue
             ent = int(bot["ent"])
@@ -579,8 +768,16 @@ class LiveBridge:
                         "links": sorted(state.used_links),
                     },
                     "missing": state.missing_payload(),
+                    **({"human": True, "name": bot.get("name")} if bot.get("human") else {}),
                 }
             )
+        frame = self._make_frame(bots_out)
+        status_rtt_ms = (status_reply - status_sent) * 1000.0
+        bridge_tick_ms = (time.monotonic() - status_reply) * 1000.0
+        _ = tick_started
+        return frame, status_rtt_ms, bridge_tick_ms
+
+    def _make_frame(self, actors: list[dict[str, Any]]) -> dict[str, Any]:
         self.seq += 1
         frame = {
             "schema": "qw-live-frame/1",
@@ -593,20 +790,27 @@ class LiveBridge:
                 "sha256": self.graph.sha256,
             },
             "attempt_id": self.attempt_id,
-            "bots": bots_out,
+            "bots": actors,
         }
-        status_rtt_ms = (status_reply - status_sent) * 1000.0
-        bridge_tick_ms = (time.monotonic() - status_reply) * 1000.0
-        _ = tick_started
         self.last_frame = frame
-        return frame, status_rtt_ms, bridge_tick_ms
+        return frame
 
     async def _telemetry_loop(self) -> None:
-        interval = 1.0 / 15.0
+        interval = 1.0 / PUSH_BROADCAST_HZ
         try:
             while not self.stop_event.is_set():
                 started = time.monotonic()
                 try:
+                    if self.push_active:
+                        if self.last_frame is not None and self.seq != self._last_broadcast_seq:
+                            ws_started = time.monotonic()
+                            await self._broadcast_ws(self.last_frame)
+                            ws_ms = (time.monotonic() - ws_started) * 1000.0
+                            self.ws_send_ms.append(ws_ms)
+                            del self.ws_send_ms[:-2000]
+                            self._last_broadcast_seq = self.seq
+                        await asyncio.sleep(max(0.0, interval - (time.monotonic() - started)))
+                        continue
                     frame, status_ms, tick_ms = await self.collect_frame()
                     ws_started = time.monotonic()
                     await self._broadcast_ws(frame)
@@ -711,6 +915,15 @@ class LiveBridge:
         if self._telemetry_task is not None:
             self._telemetry_task.cancel()
             await asyncio.gather(self._telemetry_task, return_exceptions=True)
+        if self._push_watchdog_task is not None:
+            self._push_watchdog_task.cancel()
+            await asyncio.gather(self._push_watchdog_task, return_exceptions=True)
+        if (
+            self.push_requested
+            and self._upstream_writer is not None
+            and (self._reader_task is None or not self._reader_task.done())
+        ):
+            await self._disable_push()
         for server in (self._proxy_server, self._ws_server):
             if server is not None:
                 server.close()
@@ -759,12 +972,22 @@ async def _read_ws_frame(reader: asyncio.StreamReader) -> tuple[int, bytes]:
 async def _run(args: argparse.Namespace) -> int:
     graph = GraphContract.load(args.graph)
     bridge = LiveBridge(graph, args.control, args.ws_port, args.proxy_port,
-                        record_path=args.record)
+                        record_path=args.record, push=args.push)
     if args.once:
         try:
             await bridge.connect_upstream()
-            await bridge.readiness()
-            frame, _, _ = await bridge.collect_frame()
+            status = await bridge.readiness()
+            bridge._remember_player_names(status)
+            if args.push:
+                await bridge._enable_push()
+                try:
+                    await asyncio.wait_for(bridge._pmove_seen.wait(), PUSH_FALLBACK_S + 0.1)
+                except TimeoutError:
+                    pass
+            if bridge.push_active and bridge.last_frame is not None:
+                frame = bridge.last_frame
+            else:
+                frame, _, _ = await bridge.collect_frame()
             print(json.dumps(frame, separators=(",", ":")), flush=True)
             return 0
         finally:
@@ -791,8 +1014,10 @@ def main() -> int:
     parser.add_argument("--ws-port", type=int, default=8093)
     parser.add_argument("--proxy-port", type=int, default=27981)
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--push", action="store_true",
+                        help="consume authoritative per-frame pmove events (falls back after 5 s)")
     parser.add_argument("--record", type=Path, default=None,
-                        help="append per-tick pos/cell telemetry as JSONL (debug)")
+                        help="append poll debug rows, or flattened raw pmove rows with --push")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     return asyncio.run(_run(args))

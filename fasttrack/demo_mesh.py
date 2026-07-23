@@ -62,6 +62,51 @@ def load_samples(demo_path: str, player: int | None = None) -> list[tuple]:
     return out
 
 
+def load_samples_jsonl(path: str | Path, ent: int | None = None) -> tuple[list[tuple], list[bool]]:
+    """Load flattened pmove JSONL as samples plus its authoritative ground mask.
+
+    With no explicit entity, the first entity in the stream is selected, matching
+    ``load_samples``'s one-player return contract.
+    """
+    selected = int(ent) if ent is not None else None
+    paired: list[tuple[tuple, bool]] = []
+    with Path(path).open(encoding="utf-8") as stream:
+        for line_number, raw in enumerate(stream, 1):
+            if not raw.strip():
+                continue
+            try:
+                row = json.loads(raw)
+                row_ent = int(row["ent"])
+                origin = row["origin"]
+                velocity = row.get("vel")
+                on_ground = row["on_ground"]
+                if len(origin) != 3 or not isinstance(on_ground, bool):
+                    raise ValueError("origin/on_ground shape")
+                speed = None
+                if velocity is not None:
+                    if len(velocity) != 3:
+                        raise ValueError("velocity shape")
+                    speed = math.hypot(float(velocity[0]), float(velocity[1]))
+                sample = (
+                    float(row["t"]),
+                    float(origin[0]),
+                    float(origin[1]),
+                    float(origin[2]),
+                    speed,
+                )
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+                raise ValueError(f"invalid pmove JSONL at line {line_number}: {error}") from error
+            if selected is None:
+                selected = row_ent
+            if row_ent == selected:
+                paired.append((sample, on_ground))
+    paired.sort(key=lambda item: sample_sort_key(item[0]))
+    if not paired:
+        target = f" entity {selected}" if selected is not None else ""
+        raise ValueError(f"no pmove samples for{target}")
+    return [sample for sample, _ in paired], [grounded for _, grounded in paired]
+
+
 def _heuristic_grounded_mask(samples: list[tuple]) -> list[bool]:
     """Classify samples with stable time windows on either side.
 
@@ -115,8 +160,16 @@ def _heuristic_grounded_mask(samples: list[tuple]) -> list[bool]:
     return mask
 
 
-def grounded_mask(samples: list[tuple], oracle=None) -> list[bool]:
-    """Classify ground through bsp-probe, with flagged per-point mover fallback."""
+def grounded_mask(
+    samples: list[tuple],
+    oracle=None,
+    authoritative_mask: list[bool] | None = None,
+) -> list[bool]:
+    """Use an authoritative mask, or classify through bsp-probe/heuristics."""
+    if authoritative_mask is not None:
+        if len(authoritative_mask) != len(samples):
+            raise ValueError("authoritative grounded mask must match samples")
+        return [bool(value) for value in authoritative_mask]
     heuristic = _heuristic_grounded_mask(samples)
     if oracle is None:
         return heuristic
@@ -151,10 +204,23 @@ def _point_before(samples: list[tuple], i: int, mask: list[bool], back_s: float)
     return samples[j][1:4]
 
 
-def extract(samples: list[tuple], min_link_dist: float = 96.0, oracle=None) -> dict:
+def extract(
+    samples: list[tuple],
+    min_link_dist: float = 96.0,
+    oracle=None,
+    authoritative_mask: list[bool] | None = None,
+) -> dict:
     """Required cells (clustered ground points) + deduped jump events."""
-    samples = sorted(samples, key=sample_sort_key)
-    mask = grounded_mask(samples, oracle)
+    if authoritative_mask is None:
+        samples = sorted(samples, key=sample_sort_key)
+        mask = grounded_mask(samples, oracle)
+    else:
+        if len(authoritative_mask) != len(samples):
+            raise ValueError("authoritative grounded mask must match samples")
+        paired = sorted(zip(samples, authoritative_mask), key=lambda item: sample_sort_key(item[0]))
+        samples = [sample for sample, _ in paired]
+        authoritative_mask = [bool(grounded) for _, grounded in paired]
+        mask = grounded_mask(samples, authoritative_mask=authoritative_mask)
 
     cells: dict[tuple, list] = {}
     for s, g in zip(samples, mask):
@@ -196,6 +262,8 @@ def extract(samples: list[tuple], min_link_dist: float = 96.0, oracle=None) -> d
             "from": _point_before(samples, start - 1, mask, APPROACH_S),
             "count": 0, "speeds": [], "air_s": air_s, "hdist": round(hdist, 1)})
         ev["count"] += 1
+        # Pmove input carries authoritative server XY velocity at this last
+        # grounded sample; _speed_at falls back to position delta when absent.
         ev["speeds"].append(round(_speed_at(samples, start - 1), 1))
 
     for key in sorted(jumps):
