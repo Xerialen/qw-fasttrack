@@ -187,6 +187,23 @@ visualiseras (overlay/replay är review-ytor).
    inte tillbaka efter omstart (blev 7/8 @ 11.6–11.9 + en hot-entry-krasch
    tills även de heta pit-hoppen kuraterats bort). Gate-siffror bokförs
    ENDAST från färskt omstartat tillstånd.
+6. **`server_up()` utan `lib=` byter binär** till DEFAULT_LIB (rtx-main) —
+   en omstart deployade tyst fel bygge och ALLA plants slutade avfyra
+   (hexagon 2026-07-24: 0/60-kollaps tills libben pekades om). Ge alltid
+   explicit `lib=` till merge-trial-bygget
+   (`rex-merge-trial/target/release/librtx.so`).
+7. **Länk-ID:n är INTE stabila över omstarter.** Meshgenereringen ger olika
+   id-rymd per boot/build (bas 50244 merge-trial vs 48769 rtx-main) —
+   numeriska `removes` i patchen träffar fel länkar efter reboot. Kuratera
+   GEOMETRISKT efter varje boot (`scripts/hexagon_curate.py` som mall);
+   sng-mega-patchens 196 numeriska removes har samma problem (OLÖST).
+8. **Curlprofil-plants för kurvade människohopp:** sätt
+   `rtx_jump_curl_entry_x/y`, `rtx_jump_curl_switch_dist`,
+   `rtx_jump_curl_landing_x/y` FÖRE `planlink` (patch_apply: `cvars` per
+   add; läses bara vid planttid). Ger certifierad S-kurva i luften. Plus
+   v_req strax ÖVER naturlig ankomstfart → hold-to-lip dödar vävfasens
+   laterala spridning. Kombon tog hexagonkorsningarna 55% → 100%
+   (spec `dm3-bowl-corridor-missing-spec.json`, iteration_2026_07_24).
 
 ## Se även
 
