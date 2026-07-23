@@ -1,5 +1,48 @@
 # Findings Log
 
+## 2026-07-23 — ÖPPEN DISKREPANS: curl-mål-cvars (döda eller krävs?)
+
+### Experiment
+Ingen — dokumentläsning inför merge-trial. Ägarbeslut: håll öppen, glöm ej.
+
+### Result
+Två dokument motsäger varandra om curl-mål-cvars för planterade länkar:
+- `docs/solutions/2026-07-22-dm3-under-lifts-to-sng.md` (lager 1, pkt 3,
+  skriven ~22:45): "curl-cvars MÅSTE sättas (annars styr
+  default-gain-12-korrigeringen flygbågen mot osatta mål): gain 12,
+  entry (−220,637), switch 160, landing (−302,535)."
+- `docs/runbooks/qwd-till-gron-rutt.md` (steg 5, skriven 23:54, nyare):
+  "Curl-mål-cvars behövs INTE i denna build (entry/switch/landing-cvars är
+  döda; endast `rtx_jump_curl_gain` global gain finns — planterade länkar
+  får gain 12 by default och luftsikte mot länkens landning)."
+
+### Interpretation
+**LÖST 2026-07-23 (merge-trial-sessionen), via kodarkeologi:** båda
+utsagorna var sanna — för varsin build.
+- `focus-controller` (04437e7, rutt A-certifieringen): `SpeedJumpTraversal`
+  har INGA aim-fält; `plant_link_json` sätter gain-default **12**; flygningen
+  är `air_correct`-pursuit mot bearing (länkens landning). = runbokens text.
+- `ra-tunnel-on-main` (3222689): traversal HAR aim-fälten
+  (entry/switch/landing) och `plant_link_json` defaultar gain **0**
+  ("planted links fly straight", 6ef6105) — för i DEN runtimen homade
+  gain>0 mot osatta aim-cvars → map origin (spawn-7-blockern).
+- Lösningsdokumentets "curl-cvars MÅSTE sättas" beskrev en tidig
+  focus-iteration; slut-04437e7 hade redan tagit bort aim-fälten.
+
+### Merge-beslutet
+I mergen (branch `merge-trial`): gain-default 12 ÅTERSTÄLLD (facit) ovanpå
+deras traversal-struct. Säkert eftersom aim-fälten bara aktiveras via
+profilerad axel (`curl_switch_dist != 0`), vilket cvar-lösa plants aldrig
+får — spawn-7-mekaniken kan inte återuppstå. Empiriskt dömt av gaterna
+(rutt A + RA-acceptans).
+
+### Confidence
+High (verifierad mot båda sidors källkod; empirisk dom via gaterna).
+
+### Follow-up
+Rätta lösningsdokumentets lager-1-punkt-3 ("curl-cvars MÅSTE sättas") med
+en not — texten är historisk. Runbokens text står.
+
 ## YYYY-MM-DD
 
 ### Experiment

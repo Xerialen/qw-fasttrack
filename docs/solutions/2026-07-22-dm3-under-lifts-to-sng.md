@@ -47,6 +47,10 @@ förbjudna cvars=0). Baseline: `nopatch.jsonl` 0/10.
    **curl-cvars MÅSTE sättas** (annars styr default-gain-12-korrigeringen
    flygbågen mot osatta mål): gain 12, entry (−220,637), switch 160,
    landing (−302,535).
+   *(NOT 2026-07-23: historisk text — gällde en tidig focus-iteration.
+   Slutbuilden 04437e7 har inga aim-fält alls; gain-12-default +
+   luftsikte mot landningen räcker, se runbooken steg 5 och
+   findings-log § curl-diskrepans.)*
 
 ### Lager 2 — exekutorn (rex branch `focus-controller`, pushad till `Xerialen/rtx` 2026-07-22)
 4. **sj_approach** (`205b9de`): Walk/Step-legs inom 16 legs före en
