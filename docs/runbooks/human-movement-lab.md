@@ -136,6 +136,14 @@ visualiseras (overlay/replay är review-ytor).
 - **Gate-verktyg**: `scripts/ra_gate.py <bot> <threshold> <streak>` driver
   ra_trial via proxyn (bryggan behåller sin kanal). Stora resultatevent
   (≤4096 samples) kan blockera kanalen i sekunder — generösa timeouts.
+- **Fler trial-scenarier (2026-07-23 kväll)**: `ra_trial`-verbet har utöver
+  RA-scenarierna även `sng_mega_w`/`sng_mega_s` — exakta SNG-tele-spawnsen
+  (-880,-232,-16)/(-632,-680,-16) → SNG-megan (-720,80,160), hälsobaserad
+  pickup-signal (≥199 hp + SUPERHEALTH + trigger konsumerad). Planned-drop-
+  förbudet gäller bara RA-klättringen; mega-rutten får routa över planerade
+  drops (fall >56u/stall 1s failar fortfarande). Driver med baselineprotokoll:
+  `scripts/mega_gate.py <bot>` (completion 5/5 → rekordjakt → bekräfta 5/5 =
+  ny baseline → 30 raka missar ⇒ senaste baseline).
 
 ## Metodlärdomar (dyraste felen 2026-07-23 — läs INNAN du felsöker routing)
 

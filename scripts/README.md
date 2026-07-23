@@ -9,6 +9,9 @@ Helper scripts — setup, data wrangling, validation, automation, one-off toolin
   bort redan kända luckor. Se `docs/runbooks/human-movement-lab.md`.
 - `ra_gate.py <bot> <threshold> <streak> [max] [jsonl]` — ägargaten RA-tunnel→RA-topp
   via ra_trial-verbet (proxy-säkert). JSONL-evidens per försök.
+- `mega_gate.py <bot> [jsonl]` — ägarprotokollet SNG-spawns→mega (scenarierna
+  sng_mega_w/sng_mega_s): completion 5/5 → rekordjakt → bekräfta 5/5 = ny
+  baseline → 30 raka missar ⇒ senaste baseline gäller. JSONL per försök.
 - `jump_receipt.py` — tail:ar pmove-JSONL:en och kvitterar varje hopp ≥150u
   live (takeoff→landning, distans, luftfas, serverfart) med grov
   tele-diskriminator. Används när ägaren registrerar hopp på beställning.
