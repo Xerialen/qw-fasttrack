@@ -111,6 +111,32 @@ visualiseras (overlay/replay är review-ytor).
 - 15 Hz-bryggans uppgradering till 77 Hz är loggad som öppen fråga i
   `docs/findings-log.md` (RTT-multiplikation vs server-side push).
 
+## Ärr från iterationsloopen (2026-07-23 em, RA tunnel→topp)
+
+- **`unlink` kör INTE `rebuild_derived()`** — bara `planlink` gör det. Efter
+  varje remove-batch: replanta valfri egen länk (unlink + planlink) för att
+  tvinga om reachability/LOD-tabellerna, annars planerar routern på inaktuella.
+- **`graph_dump` exporterar tombstonade länkar** (dump-verktyget ignorerar
+  removed-flaggan). Id-uppslag mot dump efter unlinks är opålitliga — verifiera
+  alltid mot motorn (`unlink <id>` svarar "already unlinked", `penalties <bot>`).
+- **puppet-`goto` ≠ `ra_trial`**: puppet-routern exekverar nativa speedjumps
+  som produktionsexekutorn vägrar fail-closed; goto-stallvakten är rak-XY mot
+  slutmålet och falskstallar rutter som passerar under målet (RA-golvet).
+  Mät item-mål med `ra_trial` (rörelsebaserad 1 s-stall, äkta pickup).
+- **Planterade länkar (planlink, curl_gain 12) exekveras av produktionen; nativa
+  i samma geometri vägras.** Kuratera genom att ersätta trasiga nativa klasser
+  med planterade payloads ur ägarfacit — inte genom att bara sänka kostnader.
+- **Straffminnet villkorar beteendet**: failed-link-penalties (se `penalties`-
+  verbet) styr replans; ett "fungerande" tillstånd efter timmar av trials kan
+  bero på ackumulerade straff och överlever INTE serveromstart. Verifiera
+  alltid gates på färskt omstartat tillstånd innan de bokförs.
+- **Bot-iterationer kräver poll-brygga**: pmove-pushen exkluderar bottar
+  (control.rs-filtret) — kör `live_start` utan `push` när ägaren ska se botens
+  försök live.
+- **Gate-verktyg**: `scripts/ra_gate.py <bot> <threshold> <streak>` driver
+  ra_trial via proxyn (bryggan behåller sin kanal). Stora resultatevent
+  (≤4096 samples) kan blockera kanalen i sekunder — generösa timeouts.
+
 ## Se även
 
 - `docs/runbooks/qwd-till-gron-rutt.md` — från qwd till certifierad rutt

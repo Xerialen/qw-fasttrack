@@ -7,6 +7,8 @@ Helper scripts — setup, data wrangling, validation, automation, one-off toolin
 - `follow_live.py [port]` — följ människan live tills hen stannar; glesa
   events (zonbyten, genuint nya mesh-luckor, stopp). Monitor-vänlig; seedar
   bort redan kända luckor. Se `docs/runbooks/human-movement-lab.md`.
+- `ra_gate.py <bot> <threshold> <streak> [max] [jsonl]` — ägargaten RA-tunnel→RA-topp
+  via ra_trial-verbet (proxy-säkert). JSONL-evidens per försök.
 - `jump_receipt.py` — tail:ar pmove-JSONL:en och kvitterar varje hopp ≥150u
   live (takeoff→landning, distans, luftfas, serverfart) med grov
   tele-diskriminator. Används när ägaren registrerar hopp på beställning.
