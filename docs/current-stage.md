@@ -1,6 +1,6 @@
 # Current Stage
 
-last-verified: 2026-07-22 (kväll)
+last-verified: 2026-07-23 (em)
 status: active
 maturity: stage-1-prototype
 
@@ -19,6 +19,19 @@ reproduktionskommandon, samt pekaren till systerlösningen
 regression → botkod). **Tar du över som nytt säte:** läs
 [docs/plans/2026-07-23-seat-handoff-branches.md](plans/2026-07-23-seat-handoff-branches.md)
 (exakt branchläge, live-läge, kvarvarande arbete, ägarbeslut).
+
+**Human Movement Lab-spåret (2026-07-23):**
+[docs/runbooks/human-movement-lab.md](runbooks/human-movement-lab.md) är
+kanonisk ingång — hela flödet (botlös server → live-brygga → pmove-facit →
+gap-spec → kuraterad plantering → ra_trial-gate), verktygen
+(`scripts/ra_gate.py`, `ws_probe.py`, `follow_live.py`, `jump_receipt.py`),
+alla ärr OCH **Metodlärdomar-sektionen (läs INNAN routing-felsökning:
+instrument före kostnadsteori, grafedit-okänslighet = kodlane, m.m.)**.
+Specar/facit: route-lab `artifacts/nav-patches/dm3-*-missing-spec.json`
+(RA-mellanledge har `iteration_2026_07_23_pm` med kodlane-blockerarna).
+Claude-profiler: skillen `movement-lab` routar hit automatiskt.
+Läge: RA tunnel→topp KOMPLETT 5/5 @ 11.8 s med ägarens mellanledge-hopp;
+ägargaten ≤10.0×5 RÖD på tre kodlane-blockerare (specen listar dem).
 
 ## Current goal
 
