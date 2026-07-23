@@ -21,8 +21,11 @@ regression → botkod). **Tar du över som nytt säte:** läs
 (exakt branchläge, live-läge, kvarvarande arbete, ägarbeslut).
 
 **Human Movement Lab-spåret (2026-07-23):**
+[docs/TOOLS.md](TOOLS.md) är **verktygsmanifestet** (engelska, modell-
+agnostiskt): varje verktyg mappat till processteg 0–6, inkl. Codex CLI —
+inga skills/MCP:er är bärande.
 [docs/runbooks/human-movement-lab.md](runbooks/human-movement-lab.md) är
-kanonisk ingång — hela flödet (botlös server → live-brygga → pmove-facit →
+kanonisk process-ingång — hela flödet (botlös server → live-brygga → pmove-facit →
 gap-spec → kuraterad plantering → ra_trial-gate), verktygen
 (`scripts/ra_gate.py`, `ws_probe.py`, `follow_live.py`, `jump_receipt.py`),
 alla ärr OCH **Metodlärdomar-sektionen (läs INNAN routing-felsökning:

@@ -167,6 +167,8 @@ visualiseras (overlay/replay är review-ytor).
 
 ## Se även
 
+- `docs/TOOLS.md` — **verktygsmanifestet** (engelska, modellagnostiskt):
+  varje verktyg → processteg, för alla LLM:er inkl. Codex CLI
 - `docs/runbooks/qwd-till-gron-rutt.md` — från qwd till certifierad rutt
 - Skill `movement-lab` (`~/.claude/skills/movement-lab/`) — operatörsingång
 - Specar: `route-lab/artifacts/nav-patches/dm3-ra-mellanledge-missing-spec.json`,
