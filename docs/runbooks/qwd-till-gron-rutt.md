@@ -48,9 +48,9 @@ på den, dumpa färskt, se steg 3).
 
 **Livelänkar att alltid kunna ge ägaren:** movement lab
 `http://127.0.0.1:8090/?graph=<namn>&live=8093` (starta med
-`core.live_start('dm3','<graf>')`); spelvyn `connect 192.168.86.20:27530`
-(ezQuake) eller `qtvplay 192.168.86.20:29530`; browser-MVD efteråt via
-LAN-spelaren `http://192.168.86.33:8095/demo-player/?demoUrl=/demos/files/...&map=dm3&from=1`
+`core.live_start('dm3','<graf>')`); spelvyn `connect <server-LAN>:27530`
+(ezQuake) eller `qtvplay <server-LAN>:29530`; browser-MVD efteråt via
+LAN-spelaren `http://<hubb-LAN>:8095/demo-player/?demoUrl=/demos/files/...&map=dm3&from=1`
 (fil till servexeri `/mnt/usb-ssd/`, chmod 644). **Nämner du servern i ett
 svar ska länken stå med.**
 

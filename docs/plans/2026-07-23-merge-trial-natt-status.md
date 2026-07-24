@@ -18,7 +18,7 @@
   på förbjudna B-slotten 27506/27956 (orörd).
 - **Webbdemo (ägarbeställd):** 6 ra_spawn-försök (4× 12.68-linjen, 1
   wall_push, 1 stall) + 3 local-hopp (2.12) på merge-builden:
-  `http://192.168.86.33:8095/demo-player/?demoUrl=/demos/files/non-games/xerbot/xerbot-ra-spawn-merge.mvd&map=dm3&from=1`
+  `http://<hubb-LAN>:8095/demo-player/?demoUrl=/demos/files/non-games/xerbot/xerbot-ra-spawn-merge.mvd&map=dm3&from=1`
 - cargo test 709/709. Rutt B:s tre live-planteringar återplanterade
   (routeb-wip, 3 adds OK) — status quo för morgondagens exekutorlane.
 - OBS ra_spawn-scenariot (HELA spawn→RA, median 12.516) är RÖTT på både

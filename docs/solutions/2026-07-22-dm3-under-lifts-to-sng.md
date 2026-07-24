@@ -11,7 +11,7 @@ bot-körningar ≤ 3,82 s (=3,18+20 %) på testservern. **UPPNÅTT och
 reproducerat ×4** (tre trialer + en MVD-inspelad): bästa trial 9/10 pass,
 tider 3,64–3,71, snabbaste enskilda 3,377. Inspelningen:
 `servexeri:/mnt/usb-ssd/non-games/xerbot/xerbot-sng-streak2.mvd` — spelas i
-webbläsare: `http://192.168.86.33:8095/demo-player/?demoUrl=/demos/files/non-games/xerbot/xerbot-sng-streak2.mvd&map=dm3&from=1`
+webbläsare: `http://<hubb-LAN>:8095/demo-player/?demoUrl=/demos/files/non-games/xerbot/xerbot-sng-streak2.mvd&map=dm3&from=1`
 
 **Acceptanskommandot (exakt):**
 ```python

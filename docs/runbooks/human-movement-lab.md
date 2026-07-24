@@ -18,7 +18,7 @@ players-array; population.rs bygger mesh när `rtx_control_port` är satt).
 | Live-brygga + viewer | ws 8093 / `fasttrack-live-bridge`, 8090 / `fasttrack-viewer` | `core.graph_dump('dm3', [192,-208,-176], '<namn>')` → `core.live_start('dm3', '<namn>')` |
 | Replay-loop (för ägarens ögon) | ws 8095 / `fasttrack-replay` | `core.demo_replay_start('<qwd>', '<grafnamn>', speed=1.0)` |
 
-Ägaren ansluter ezQuake: `connect 127.0.0.1:27530` (LAN: `192.168.86.20:27530`).
+Ägaren ansluter ezQuake: `connect 127.0.0.1:27530` (LAN: `<server-LAN>:27530`).
 Live-vy: `http://127.0.0.1:8090/?graph=<namn>&live=8093` (+`&overlay=<namn>`).
 Replay-vy: samma med `live=8095`. Viewern binder loopback — öppnas på pinnacle.
 

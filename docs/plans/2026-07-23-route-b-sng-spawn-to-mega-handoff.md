@@ -74,7 +74,7 @@ rutt och rutten vi just löste)."*
 - Portar (spel 27530/kontroll 27980/QTV 29530); rör aldrig 8765/8767/8088/
   27504/06/08/16/21; förbjudna cvars = 0 (ledgern verifierar).
 - Viewer: 8090; demo-replay 8096; livebrygga live_start → 8093.
-  Hubb-demospelare på LAN: http://192.168.86.33:8095/demo-player/?demoUrl=...
+  Hubb-demospelare på LAN: http://<hubb-LAN>:8095/demo-player/?demoUrl=...
   (servera filer via servexeri /mnt/usb-ssd/, chmod 644).
 
 ## Kända fällor längs just denna väg
