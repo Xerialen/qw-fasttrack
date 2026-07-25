@@ -58,6 +58,58 @@ class LinkAttributionTests(unittest.TestCase):
         self.assertFalse(stamped)
 
 
+class GroundVerdictTests(unittest.TestCase):
+    """A 32u carve cannot place a cell against a wall; that is not a hole.
+
+    Regression for the wall-hugging false positive: every step a player took
+    along the pent ledge resolved to nothing and was stamped as missing ground,
+    because the tolerance (24) was smaller than the distance to the last cell
+    centre a 32u grid can offer (up to 32). The red layer then filled with
+    ground the mesh represents perfectly well one square to the side.
+    """
+
+    def _matcher(self, cells):
+        ids = list(range(10, 10 + len(cells)))
+        return GraphMatcher(GraphContract(
+            path=Path("fixture.json"), name="fixture", sha256="abc",
+            cells=cells, links=[], cell_ids=ids, link_ids=[], links_by_cells={},
+            cell_z_by_id={i: c[2] for i, c in zip(ids, cells, strict=True)},
+            cell_by_id=dict(zip(ids, cells, strict=True)),
+        ))
+
+    def test_inside_a_cells_own_square_is_covered(self):
+        matcher = self._matcher([[0, 0, 0], [0, 32, 0]])
+        self.assertEqual(matcher.classify([4, 16, 0]), (10, GraphMatcher.COVERED))
+
+    def test_ground_past_the_last_cell_row_is_off_grid_not_missing(self):
+        # The row ends at y=0; y=32 would be inside a wall, so no rebuild can
+        # cover y=27. The bot cannot stand there, but the ground is continuous.
+        matcher = self._matcher([[0, 0, 0]])
+        cell, verdict = matcher.classify([0, 27, 0])
+        self.assertEqual(verdict, GraphMatcher.OFF_GRID)
+        self.assertEqual(cell, 10)
+
+    def test_off_grid_ground_still_attributes_so_the_chain_holds(self):
+        matcher = self._matcher([[0, 0, 0]])
+        self.assertEqual(matcher.resolve([0, 27, 0]), 10)
+
+    def test_ground_beyond_a_pitch_is_missing(self):
+        matcher = self._matcher([[0, 0, 0]])
+        self.assertEqual(matcher.classify([0, 40, 0]), (None, GraphMatcher.MISSING))
+
+    def test_a_shelf_far_above_the_nearest_cell_stays_missing(self):
+        # The dm3 SNG shelf: real ground 104u above the only cell beneath it.
+        matcher = self._matcher([[0, 0, -16]])
+        self.assertEqual(matcher.classify([0, 0, 88]), (None, GraphMatcher.MISSING))
+
+    def test_off_grid_ground_is_reported_apart_from_missing(self):
+        state = Attribution()
+        state.note_off_grid([0.0, 27.0, 0.0])
+        payload = state.missing_payload()
+        self.assertEqual(payload["cells"], [])
+        self.assertEqual(payload["off_grid"], [[0.0, 27.0, 0.0]])
+
+
 class PushPmoveTests(unittest.IsolatedAsyncioTestCase):
     async def test_authoritative_one_frame_contact_is_recorded_and_attributed_locally(self):
         graph = GraphContract(

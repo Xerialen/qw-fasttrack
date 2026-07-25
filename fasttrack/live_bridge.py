@@ -134,32 +134,72 @@ class GraphContract:
 class GraphMatcher:
     """Resolve world points against a graph file without control requests."""
 
-    CELL_XY = 24.0
+    GRID = 32.0
+    # A cell owns the grid square it sits in: half a pitch either way.
+    CELL_XY = GRID / 2
+    # Ground can sit up to a full pitch from the nearest cell centre and still be
+    # the same continuous surface: the square that would cover it holds no cell
+    # because a player hull cannot stand there (a wall is in the way), and no
+    # rebuild at this pitch can ever produce one. Judging that "missing" reports
+    # a hole where the carve is simply out of resolution -- and every wall-hugging
+    # step a player takes then glows red, drowning the real gaps.
+    NEAR_XY = GRID
     CELL_Z = 40.0
+
+    COVERED = "covered"
+    OFF_GRID = "off_grid"
+    MISSING = "missing"
 
     def __init__(self, graph: GraphContract):
         self.graph = graph
         self.columns: dict[tuple[int, int], list[int]] = {}
         for index, cell in enumerate(graph.cells):
-            key = (math.floor(cell[0] / 32.0), math.floor(cell[1] / 32.0))
+            key = (math.floor(cell[0] / self.GRID), math.floor(cell[1] / self.GRID))
             self.columns.setdefault(key, []).append(index)
 
-    def resolve(self, point) -> int | None:
-        cx, cy = math.floor(point[0] / 32.0), math.floor(point[1] / 32.0)
-        best, best_d = None, None
+    def classify(self, point) -> tuple[int | None, str]:
+        """``(cell, verdict)`` for a grounded point.
+
+        ``covered``  - inside a cell's own grid square; a bot can stand here.
+        ``off_grid`` - no cell square covers it, but a cell within one pitch sits
+                       at a compatible height. The bot cannot stand exactly here,
+                       yet the ground is continuous with a cell it can stand on.
+                       Resolution residue against an edge, not a gap to fill.
+        ``missing``  - no cell within a pitch at a compatible height: a real hole,
+                       ground the mesh does not represent at all.
+        """
+        cx, cy = math.floor(point[0] / self.GRID), math.floor(point[1] / self.GRID)
+        best: int | None = None
+        best_d: float | None = None
+        best_dxy: tuple[float, float] = (0.0, 0.0)
         for dx in (-1, 0, 1):
             for dy in (-1, 0, 1):
                 for index in self.columns.get((cx + dx, cy + dy), ()):
                     cell = self.graph.cells[index]
-                    if (
-                        abs(cell[0] - point[0]) <= self.CELL_XY
-                        and abs(cell[1] - point[1]) <= self.CELL_XY
-                        and abs(cell[2] - point[2]) <= self.CELL_Z
-                    ):
-                        distance = (cell[0] - point[0]) ** 2 + (cell[1] - point[1]) ** 2
-                        if best_d is None or distance < best_d:
-                            best, best_d = self.graph.cell_ids[index], distance
-        return best
+                    ddx = abs(cell[0] - point[0])
+                    ddy = abs(cell[1] - point[1])
+                    if ddx > self.NEAR_XY or ddy > self.NEAR_XY:
+                        continue
+                    if abs(cell[2] - point[2]) > self.CELL_Z:
+                        continue
+                    distance = ddx * ddx + ddy * ddy
+                    if best_d is None or distance < best_d:
+                        best, best_d, best_dxy = self.graph.cell_ids[index], distance, (ddx, ddy)
+        if best is None:
+            return None, self.MISSING
+        if best_dxy[0] <= self.CELL_XY and best_dxy[1] <= self.CELL_XY:
+            return best, self.COVERED
+        return best, self.OFF_GRID
+
+    def resolve(self, point) -> int | None:
+        """The cell a grounded point attributes to -- covered or off-grid alike.
+
+        Off-grid ground must still attribute, or a player hugging a wall breaks
+        the attribution chain and the next resolved cell is recorded as an
+        unlinked traversal from wherever the chain last held: a phantom missing
+        link hundreds of units long.
+        """
+        return self.classify(point)[0]
 
 
 @dataclass
@@ -173,6 +213,11 @@ class Attribution:
     # ground with no cell, traversals with no link. Rendered glowing red.
     missing_cells: dict = field(default_factory=dict)
     missing_links: list = field(default_factory=list)
+    # Ground the actor used that is continuous with a cell but lies outside any
+    # cell's own grid square -- the carve's resolution limit against an edge, not
+    # a hole. Reported apart from `missing_cells` so the red layer stays a list
+    # of things worth fixing.
+    off_grid_cells: dict = field(default_factory=dict)
 
     def reset(self) -> None:
         self.used_cells.clear()
@@ -186,6 +231,11 @@ class Attribution:
         self.missing_cells.setdefault(
             key, [round(position[0], 1), round(position[1], 1), round(position[2], 1)])
 
+    def note_off_grid(self, position) -> None:
+        key = (int(position[0] // 32), int(position[1] // 32), int(position[2] // 32))
+        self.off_grid_cells.setdefault(
+            key, [round(position[0], 1), round(position[1], 1), round(position[2], 1)])
+
     def note_missing_traversal(self, from_point, to_point) -> None:
         entry = {"from": [round(v, 1) for v in from_point],
                  "to": [round(v, 1) for v in to_point]}
@@ -194,7 +244,8 @@ class Attribution:
 
     def missing_payload(self) -> dict:
         return {"cells": [list(v) for v in self.missing_cells.values()],
-                "links": [dict(m) for m in self.missing_links]}
+                "links": [dict(m) for m in self.missing_links],
+                "off_grid": [list(v) for v in self.off_grid_cells.values()]}
 
     def observe(self, cell: int, now: float, graph: GraphContract) -> None:
         self.used_cells.add(cell)
@@ -467,11 +518,15 @@ class LiveBridge:
                     ent,
                     {"last_ground_pos": None, "airborne_from": None, "airborne_point": None},
                 )
-                resolved = self.graph_matcher.resolve(position) if on_ground else None
+                resolved, verdict = (
+                    self.graph_matcher.classify(position) if on_ground else (None, None)
+                )
                 if on_ground:
                     if resolved is None:
                         state.note_missing_ground(position)
                     else:
+                        if verdict == GraphMatcher.OFF_GRID:
+                            state.note_off_grid(position)
                         if (
                             aux["airborne_from"] is not None
                             and aux["airborne_from"] != resolved
