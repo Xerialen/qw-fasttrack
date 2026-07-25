@@ -145,6 +145,13 @@ class GraphMatcher:
     # step a player takes then glows red, drowning the real gaps.
     NEAR_XY = GRID
     CELL_Z = 40.0
+    # ...but only on essentially the same plane. CELL_Z is a localisation slack
+    # that has to swallow steps and slopes UNDER a cell's own square; reusing it
+    # sideways would let a shelf 32u up and 27u across pass as residue and vanish
+    # from the red layer -- precisely the class of gap this tool exists to find.
+    # A carve row and the ground beside it differ by the surface's own slope over
+    # one square, which on dm3's steepest meshed ramp is under 5 units.
+    OFF_GRID_Z = 8.0
 
     COVERED = "covered"
     OFF_GRID = "off_grid"
@@ -161,35 +168,41 @@ class GraphMatcher:
         """``(cell, verdict)`` for a grounded point.
 
         ``covered``  - inside a cell's own grid square; a bot can stand here.
-        ``off_grid`` - no cell square covers it, but a cell within one pitch sits
-                       at a compatible height. The bot cannot stand exactly here,
-                       yet the ground is continuous with a cell it can stand on.
-                       Resolution residue against an edge, not a gap to fill.
-        ``missing``  - no cell within a pitch at a compatible height: a real hole,
-                       ground the mesh does not represent at all.
+        ``off_grid`` - no cell square covers it, but a cell one pitch away sits on
+                       the SAME PLANE (``OFF_GRID_Z``). The bot cannot stand
+                       exactly here, yet the ground runs on into a cell it can
+                       stand on. Resolution residue against an edge.
+        ``missing``  - anything else: ground the mesh does not represent, whether
+                       there is no cell nearby at all or the nearest one is at a
+                       height this surface does not simply continue into.
+
+        A 3x3 column scan is exhaustive: for ``q = floor(p / GRID)`` any cell
+        within ``GRID`` of ``p`` on an axis lands in ``q-1``, ``q`` or ``q+1``.
         """
         cx, cy = math.floor(point[0] / self.GRID), math.floor(point[1] / self.GRID)
-        best: int | None = None
-        best_d: float | None = None
-        best_dxy: tuple[float, float] = (0.0, 0.0)
+        covered: tuple[int, float] | None = None
+        residue: tuple[int, float] | None = None
         for dx in (-1, 0, 1):
             for dy in (-1, 0, 1):
                 for index in self.columns.get((cx + dx, cy + dy), ()):
                     cell = self.graph.cells[index]
                     ddx = abs(cell[0] - point[0])
                     ddy = abs(cell[1] - point[1])
+                    ddz = abs(cell[2] - point[2])
                     if ddx > self.NEAR_XY or ddy > self.NEAR_XY:
                         continue
-                    if abs(cell[2] - point[2]) > self.CELL_Z:
-                        continue
                     distance = ddx * ddx + ddy * ddy
-                    if best_d is None or distance < best_d:
-                        best, best_d, best_dxy = self.graph.cell_ids[index], distance, (ddx, ddy)
-        if best is None:
-            return None, self.MISSING
-        if best_dxy[0] <= self.CELL_XY and best_dxy[1] <= self.CELL_XY:
-            return best, self.COVERED
-        return best, self.OFF_GRID
+                    if ddx <= self.CELL_XY and ddy <= self.CELL_XY and ddz <= self.CELL_Z:
+                        if covered is None or distance < covered[1]:
+                            covered = (self.graph.cell_ids[index], distance)
+                    elif ddz <= self.OFF_GRID_Z:
+                        if residue is None or distance < residue[1]:
+                            residue = (self.graph.cell_ids[index], distance)
+        if covered is not None:
+            return covered[0], self.COVERED
+        if residue is not None:
+            return residue[0], self.OFF_GRID
+        return None, self.MISSING
 
     def resolve(self, point) -> int | None:
         """The cell a grounded point attributes to -- covered or off-grid alike.
@@ -378,13 +391,31 @@ class LiveBridge:
             self._upstream_writer.write(mpwire.pack_frame({"id": 0, "cmd": "Status"}))
             await self._upstream_writer.drain()
             head = await asyncio.wait_for(self._upstream_reader.readexactly(4), MSGPACK_PROBE_S)
-            body = await asyncio.wait_for(
-                self._upstream_reader.readexactly(int.from_bytes(head, "little")),
-                MSGPACK_PROBE_S)
-            _ft._translate_msg(mpwire.unpackb(body))
+            # A length prefix came back, so this IS a msgpack server. Commit now:
+            # falling back to text from here would write a line to a framed reader,
+            # which it cannot resynchronise from. Only a header that never arrives
+            # means legacy -- the body gets the connection's own patience, and a
+            # slow one must not be misread as a text server.
             self._msgpack = True
+            for _ in range(8):
+                size = int.from_bytes(head, "little")
+                if size > mpwire.MAX_FRAME:
+                    raise ValueError(f"handshake frame of {size} bytes exceeds MAX_FRAME")
+                message = _ft._translate_msg(mpwire.unpackb(
+                    await self._upstream_reader.readexactly(size)))
+                if message.get("id") == 0:
+                    break
+                # An event the engine had queued before our Status. The reader task
+                # is not up yet, so it has nowhere to go.
+                LOG.info("dropping pre-handshake event %r", message.get("ev"))
+                head = await self._upstream_reader.readexactly(4)
         except (asyncio.TimeoutError, asyncio.IncompleteReadError, ValueError, TypeError,
                 KeyError, OSError) as exc:
+            if self._msgpack:
+                # It answered with a frame and then went wrong. That is a broken
+                # msgpack peer, not a text one; retrying as text writes a line it
+                # can never resynchronise from.
+                raise
             LOG.info("control channel is legacy text (%s)", type(exc).__name__)
             self._upstream_writer.close()
             self._upstream_reader, self._upstream_writer = await self._open()

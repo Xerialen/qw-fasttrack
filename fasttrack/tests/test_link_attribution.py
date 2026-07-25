@@ -89,10 +89,6 @@ class GroundVerdictTests(unittest.TestCase):
         self.assertEqual(verdict, GraphMatcher.OFF_GRID)
         self.assertEqual(cell, 10)
 
-    def test_off_grid_ground_still_attributes_so_the_chain_holds(self):
-        matcher = self._matcher([[0, 0, 0]])
-        self.assertEqual(matcher.resolve([0, 27, 0]), 10)
-
     def test_ground_beyond_a_pitch_is_missing(self):
         matcher = self._matcher([[0, 0, 0]])
         self.assertEqual(matcher.classify([0, 40, 0]), (None, GraphMatcher.MISSING))
@@ -101,6 +97,48 @@ class GroundVerdictTests(unittest.TestCase):
         # The dm3 SNG shelf: real ground 104u above the only cell beneath it.
         matcher = self._matcher([[0, 0, -16]])
         self.assertEqual(matcher.classify([0, 0, 88]), (None, GraphMatcher.MISSING))
+
+    def test_a_shelf_just_off_to_the_side_is_missing_not_residue(self):
+        # The band CELL_Z alone would swallow: a shelf a jump-height up and a
+        # square across. Ground does not continue into the cell here, it steps
+        # away from it, and a mesh that cannot represent it must say so.
+        matcher = self._matcher([[0, 0, 0]])
+        for dz in (12, 20, 32, 40):
+            with self.subTest(dz=dz):
+                self.assertEqual(matcher.classify([27, 0, dz]),
+                                 (None, GraphMatcher.MISSING))
+
+    def test_residue_is_only_the_same_plane_beside_a_cell(self):
+        matcher = self._matcher([[0, 0, 0]])
+        # A ramp's own slope across one square stays residue...
+        self.assertEqual(matcher.classify([27, 0, 4])[1], GraphMatcher.OFF_GRID)
+        # ...a step does not.
+        self.assertEqual(matcher.classify([27, 0, 18])[1], GraphMatcher.MISSING)
+
+    def test_a_cell_under_the_point_still_wins_over_residue_beside_it(self):
+        # Standing inside a cell's own square, on a slope, must resolve to that
+        # cell even though a flatter neighbour is nearer in plan.
+        matcher = self._matcher([[0, 0, 0], [32, 0, 0]])
+        cell, verdict = matcher.classify([2, 0, 30])
+        self.assertEqual(verdict, GraphMatcher.COVERED)
+        self.assertEqual(cell, 10)
+
+    def test_walking_off_grid_beside_a_row_invents_no_missing_link(self):
+        # The pent-ledge regression, end to end: the mesh row runs east at y=0,
+        # the player walks the same plane at y=27 where no cell can exist. Every
+        # step must attribute to the row it is beside -- not break the chain and
+        # then report one long unlinked traversal across the whole ledge.
+        cells = [[float(x), 0.0, 0.0] for x in (0, 32, 64, 96)]
+        matcher = self._matcher(cells)
+        graph = matcher.graph
+        state = Attribution()
+        for x in (0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96):
+            cell, verdict = matcher.classify([float(x), 27.0, 0.0])
+            self.assertEqual(verdict, GraphMatcher.OFF_GRID, f"x={x}")
+            self.assertIsNotNone(cell, f"x={x}")
+            state.observe(cell, 0.1 * x, graph)
+        self.assertEqual(state.missing_links, [], "walking beside a row is not a gap")
+        self.assertEqual(state.used_cells, {10, 11, 12, 13})
 
     def test_off_grid_ground_is_reported_apart_from_missing(self):
         state = Attribution()
