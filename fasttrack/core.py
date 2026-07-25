@@ -126,7 +126,7 @@ class NotSupported(ControlError):
 
 # Verbs that exist only in the lab fork; there is no a293067 Cmd for them.
 _MSGPACK_UNSUPPORTED = {
-    "unlink", "plancell", "planrjraw", "ra_trial", "ra_spawn", "sjtrace",
+    "unlink", "planrjraw", "ra_trial", "ra_spawn", "sjtrace",
     "penalties", "sng_mega", "sng_mega_trial", "__ping__", "__latency__",
     "__missing__",
 }
@@ -196,6 +196,14 @@ def _parse_verb(verb_and_args: str):
                           "psi0": float(tokens[7]), "runway": float(tokens[8])}}
     if verb == "runcmd":
         return {"RunCmd": {"raw": verb_and_args[len(tokens[0]):].strip()}}
+    if verb == "plancell":
+        # plancell <x y z> - index a walkable surface the column carve cannot sample.
+        # The server snaps z to the floor and wires walk/step links to same-height neighbours.
+        return {"PlanCell": {"pos": _mp_vec3(tokens, 1)}}
+    if verb == "plandrop":
+        # plandrop <from xyz> <to xyz> - a way OFF a planted shelf. Plant the shelf cell
+        # first: `from` resolves through `nearest`, which would otherwise pick the floor below.
+        return {"PlanDrop": {"from": _mp_vec3(tokens, 1), "to": _mp_vec3(tokens, 4)}}
     if verb == "planlink":
         # planlink <from xyz> <takeoff xyz> <tgt xyz> <v_req>
         return {"PlanLink": {"from": _mp_vec3(tokens, 1), "takeoff": _mp_vec3(tokens, 4),

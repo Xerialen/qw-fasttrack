@@ -23,9 +23,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import core as _ft  # verb->Cmd parsing and Msg->legacy-dict translation
+import mpwire
+
 
 LOG = logging.getLogger("fasttrack.live_bridge")
 MISSING_GROUND_DZ_TOL = 2.0
+# How long the msgpack handshake waits before concluding the control channel is
+# legacy text. A real msgpack server answers a local Status in milliseconds, so
+# this only ever runs to full length against a text server -- where it is dead
+# time on every bridge start, and long enough to blow a caller's own timeout.
+MSGPACK_PROBE_S = 1.0
 PUSH_FALLBACK_S = 5.0
 PUSH_BROADCAST_HZ = 15.0
 STATE_FILE = Path.home() / ".local" / "share" / "qw-fasttrack" / "live-bridge.json"
@@ -276,6 +284,7 @@ class LiveBridge:
         self._proxy_server: asyncio.AbstractServer | None = None
         self._ws_server: asyncio.AbstractServer | None = None
         self._send_lock = asyncio.Lock()
+        self._msgpack = False          # decided by the probe in connect_upstream
         self._next_sid = 1
         self.pending: dict[int, Pending] = {}
         self.proxy_clients: set[ProxyClient] = set()
@@ -296,25 +305,68 @@ class LiveBridge:
         self._player_names: dict[int, str] = {}
         self.stop_event = asyncio.Event()
 
-    async def connect_upstream(self) -> None:
+    async def _open(self):
         # ra_trial_result-event bär upp till 4096 samples (~350 KB på EN rad) —
         # asyncios default-limit (64 KB) får readline att kasta ValueError och
         # döda bryggan mitt i en gate-körning (2026-07-23 em: live-vyn dog för
         # ägaren). 4 MiB rymmer värsta kända eventet med bred marginal.
-        self._upstream_reader, self._upstream_writer = await asyncio.open_connection(
+        return await asyncio.open_connection(
             self.control_host, self.control_port, limit=4 * 1024 * 1024
         )
+
+    async def connect_upstream(self) -> None:
+        # The engine moved the control channel from newline-JSON to length-framed msgpack.
+        # Probe msgpack first (a text server simply never answers an unterminated frame, so
+        # the probe times out cleanly; a msgpack server resets a text line, which is not
+        # recoverable) and keep the legacy path for older builds. `core` owns both the
+        # verb->Cmd parsing and the Msg->legacy-dict translation, so everything downstream
+        # of the reader keeps seeing exactly the dict shape it always saw.
+        self._upstream_reader, self._upstream_writer = await self._open()
+        self._msgpack = False
+        try:
+            self._upstream_writer.write(mpwire.pack_frame({"id": 0, "cmd": "Status"}))
+            await self._upstream_writer.drain()
+            head = await asyncio.wait_for(self._upstream_reader.readexactly(4), MSGPACK_PROBE_S)
+            body = await asyncio.wait_for(
+                self._upstream_reader.readexactly(int.from_bytes(head, "little")),
+                MSGPACK_PROBE_S)
+            _ft._translate_msg(mpwire.unpackb(body))
+            self._msgpack = True
+        except (asyncio.TimeoutError, asyncio.IncompleteReadError, ValueError, TypeError,
+                KeyError, OSError) as exc:
+            LOG.info("control channel is legacy text (%s)", type(exc).__name__)
+            self._upstream_writer.close()
+            self._upstream_reader, self._upstream_writer = await self._open()
+        LOG.info("control wire: %s", "msgpack" if self._msgpack else "text")
         self._reader_task = asyncio.create_task(self._upstream_loop(), name="control-reader")
+
+    async def _read_upstream(self) -> dict[str, Any] | None:
+        """One upstream message in the legacy dict shape, or None at end of stream."""
+        assert self._upstream_reader is not None
+        if not self._msgpack:
+            line = await self._upstream_reader.readline()
+            if not line:
+                return None
+            try:
+                return json.loads(line)
+            except json.JSONDecodeError:
+                LOG.warning("discarding invalid upstream JSON: %r", line[:200])
+                return {}
+        try:
+            head = await self._upstream_reader.readexactly(4)
+            body = await self._upstream_reader.readexactly(int.from_bytes(head, "little"))
+        except asyncio.IncompleteReadError:
+            return None
+        try:
+            return _ft._translate_msg(mpwire.unpackb(body))
+        except (ValueError, TypeError, KeyError) as exc:
+            LOG.warning("discarding undecodable upstream frame: %s", exc)
+            return {}
 
     async def _upstream_loop(self) -> None:
         assert self._upstream_reader is not None
         try:
-            while line := await self._upstream_reader.readline():
-                try:
-                    message = json.loads(line)
-                except json.JSONDecodeError:
-                    LOG.warning("discarding invalid upstream JSON: %r", line[:200])
-                    continue
+            while (message := await self._read_upstream()) is not None:
                 if "id" in message:
                     await self._route_reply(message)
                 elif "ev" in message:
@@ -467,7 +519,11 @@ class LiveBridge:
             self.pending[sid] = pending
             if isinstance(pending.owner, ProxyClient):
                 pending.owner.pending_sids.add(sid)
-            self._upstream_writer.write(f"{sid} {command}\n".encode("ascii"))
+            if self._msgpack:
+                self._upstream_writer.write(
+                    mpwire.pack_frame({"id": sid, "cmd": _ft._parse_verb(command)}))
+            else:
+                self._upstream_writer.write(f"{sid} {command}\n".encode("ascii"))
             await self._upstream_writer.drain()
             return sid
 
