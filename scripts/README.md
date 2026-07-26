@@ -25,3 +25,7 @@ Helper scripts — setup, data wrangling, validation, automation, one-off toolin
 Document how to run anything non-obvious in `docs/environment.md` (the runbook).
 Changes here count as code changes for the documentation contract (see
 `AGENTS.md`): update at least one relevant doc when you change behavior.
+- `match_snapshot.py --secs N --label L --branch B --build SHA --out f.json` — följ en
+  labbmatch: quad/pent-cykler (2 Hz), fart/stillastående (10 Hz), bot_stall-events;
+  skriver snapshot-JSON för stall-diagnostik-artefakten. Arkiv:
+  `~/.local/share/qw-fasttrack/evidence/snapshots/<datum>/`.
