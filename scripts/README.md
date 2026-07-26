@@ -29,3 +29,6 @@ Changes here count as code changes for the documentation contract (see
   labbmatch: quad/pent-cykler (2 Hz), fart/stillastående (10 Hz), bot_stall-events;
   skriver snapshot-JSON för stall-diagnostik-artefakten. Arkiv:
   `~/.local/share/qw-fasttrack/evidence/snapshots/<datum>/`.
+- `combat_lock.py --json <qw-analyze-full.json> [--out r.json]` — sekunder per spelare
+  beskjuten inom POV (120°) utan att skjuta tillbaka (fönster 1.2 s). Kör qw-analyze
+  `-view full -include positions,view` först.
