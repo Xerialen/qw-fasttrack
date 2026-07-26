@@ -31,7 +31,23 @@ ap.add_argument("--out", required=True)
 ap.add_argument("--label", required=True)
 ap.add_argument("--branch", required=True)
 ap.add_argument("--build", required=True)
+ap.add_argument("--run", type=int, default=None,
+                help="löpnummer; default: nästa ur evidence/snapshots/runseq")
 args = ap.parse_args()
+
+# Monotont löpnummer över alla runs, oavsett datum — så två körningar samma dag
+# alltid går att ordna. Räknaren bor bredvid arkivet och stegas atomiskt nog
+# för en-writer-bruket här (en följare per labb).
+RUNSEQ = "/home/xerial/.local/share/qw-fasttrack/evidence/snapshots/runseq"
+if args.run is None:
+    try:
+        current = int(open(RUNSEQ).read().strip())
+    except (FileNotFoundError, ValueError):
+        current = 0
+    args.run = current + 1
+    import os
+    os.makedirs(os.path.dirname(RUNSEQ), exist_ok=True)
+    open(RUNSEQ, "w").write(str(args.run))
 
 c = core.Control("127.0.0.1", 27980, timeout=20)
 
@@ -171,9 +187,11 @@ stats = {
     "polls": n_polls,
 }
 
-json.dump({"label": args.label, "date": time.strftime("%Y-%m-%d"),
+json.dump({"run": args.run, "label": args.label,
+           "date": time.strftime("%Y-%m-%d"), "time": time.strftime("%H:%M"),
            "branch": args.branch, "build": args.build,
            "stats": stats, "cells": out_cells}, open(args.out, "w"),
           separators=(",", ":"))
+print("run #", args.run)
 print(json.dumps(stats, indent=1))
 print("celler:", len(out_cells), "->", args.out)
