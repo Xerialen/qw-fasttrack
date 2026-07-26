@@ -204,6 +204,28 @@ visualiseras (overlay/replay är review-ytor).
    v_req strax ÖVER naturlig ankomstfart → hold-to-lip dödar vävfasens
    laterala spridning. Kombon tog hexagonkorsningarna 55% → 100%
    (spec `dm3-bowl-corridor-missing-spec.json`, iteration_2026_07_24).
+9. **Live-replant är INTE idempotent — ETT experiment per boot.** Att
+   planta om EXAKT samma geometri/v_req på en redan liveredigerad graf ger
+   INTE tillbaka samma beteende (mega 2026-07-25: 3/8 → curl-test → återställ
+   identisk plant v470 → 0/8 med fall på helt ny tid 9.9 s). Plants får nya
+   id:n, kostnads-/ordningsbilden skiftar och routern väljer annorlunda.
+   Följd: varje mätning EFTER första live-editen på en boot är obrukbar.
+   Giltig loop för ruttändring = **ändra kurationskonfig → färsk boot →
+   mät en gång** (~6 min/datapunkt, navmesh-bygget dominerar). Snabb
+   live-iteration är ogiltig metod för rutt-tuning; den duger bara för
+   ren rekognosering (läsa celler/rutter) som inte bokförs.
+10. **Curl är för LATERALA S-kurvor, inte för långa raka nedförshopp.**
+   Curlprofil lyfte hexagonkorsningarna 55 %→100 % (kurvad linje förbi
+   kurbar), men på mega-J6 ((-672,864,120)→(-512,512,120), lång rak
+   nedförsbana) gjorde tre profiler det VÄRRE: 3/8 → 0/8, fall 4,4–4,9 s.
+   Rak plant utan curl (v_req 470) är bäst där. Välj verktyg efter hoppets
+   form, inte efter att det hjälpte förra gången.
+11. **Ta inte bort "konkurrerande" nativa speedjumps i klump.** Mega-rutten
+   ANVÄNDER nativa SJ (t.ex. 36731 som första stora hopp); att stripa alla
+   2 581 nativa SJ i mega-regionen (2 480 unlinkade) sänkte rutten tidigare
+   (fail 3,84 s). Och att ta bort en enskild planterad SJ (J9 50269) gjorde
+   målet ONÅBART (`item_health has no reachable touch-valid terminal`) —
+   plannern behövde just den. Kuratera smalt och verifiera nåbarhet direkt.
 
 ## Se även
 

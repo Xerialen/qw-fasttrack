@@ -18,10 +18,16 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import sys
 from pathlib import Path
 
-QWD_TOOLS = Path("/mnt/c/Users/benya/projects/quakeworld/tools/qwd-corpus-pipeline")
+# The qwd parser lives outside this repo. Hard-coding one machine's path means the
+# module cannot even be imported anywhere else -- the demo replay dies at startup
+# with ModuleNotFoundError on any host but the one it was written on.
+QWD_TOOLS = Path(os.environ.get(
+    "FASTTRACK_QWD_TOOLS",
+    "/mnt/c/Users/benya/projects/quakeworld/tools/qwd-corpus-pipeline"))
 sys.path.insert(0, str(QWD_TOOLS))
 import qwd_dump  # noqa: E402
 from ground_oracle import GroundOracle, OracleUnavailable, heuristic_evidence  # noqa: E402

@@ -23,9 +23,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import core as _ft  # verb->Cmd parsing and Msg->legacy-dict translation
+import mpwire
+
 
 LOG = logging.getLogger("fasttrack.live_bridge")
 MISSING_GROUND_DZ_TOL = 2.0
+# How long the msgpack handshake waits before concluding the control channel is
+# legacy text. A real msgpack server answers a local Status in milliseconds, so
+# this only ever runs to full length against a text server -- where it is dead
+# time on every bridge start, and long enough to blow a caller's own timeout.
+MSGPACK_PROBE_S = 1.0
 PUSH_FALLBACK_S = 5.0
 PUSH_BROADCAST_HZ = 15.0
 STATE_FILE = Path.home() / ".local" / "share" / "qw-fasttrack" / "live-bridge.json"
@@ -126,32 +134,85 @@ class GraphContract:
 class GraphMatcher:
     """Resolve world points against a graph file without control requests."""
 
-    CELL_XY = 24.0
+    GRID = 32.0
+    # A cell owns the grid square it sits in: half a pitch either way.
+    CELL_XY = GRID / 2
+    # Ground can sit up to a full pitch from the nearest cell centre and still be
+    # the same continuous surface: the square that would cover it holds no cell
+    # because a player hull cannot stand there (a wall is in the way), and no
+    # rebuild at this pitch can ever produce one. Judging that "missing" reports
+    # a hole where the carve is simply out of resolution -- and every wall-hugging
+    # step a player takes then glows red, drowning the real gaps.
+    NEAR_XY = GRID
     CELL_Z = 40.0
+    # ...but only on essentially the same plane. CELL_Z is a localisation slack
+    # that has to swallow steps and slopes UNDER a cell's own square; reusing it
+    # sideways would let a shelf 32u up and 27u across pass as residue and vanish
+    # from the red layer -- precisely the class of gap this tool exists to find.
+    # A carve row and the ground beside it differ by the surface's own slope over
+    # one square, which on dm3's steepest meshed ramp is under 5 units.
+    OFF_GRID_Z = 8.0
+
+    COVERED = "covered"
+    OFF_GRID = "off_grid"
+    MISSING = "missing"
 
     def __init__(self, graph: GraphContract):
         self.graph = graph
         self.columns: dict[tuple[int, int], list[int]] = {}
         for index, cell in enumerate(graph.cells):
-            key = (math.floor(cell[0] / 32.0), math.floor(cell[1] / 32.0))
+            key = (math.floor(cell[0] / self.GRID), math.floor(cell[1] / self.GRID))
             self.columns.setdefault(key, []).append(index)
 
-    def resolve(self, point) -> int | None:
-        cx, cy = math.floor(point[0] / 32.0), math.floor(point[1] / 32.0)
-        best, best_d = None, None
+    def classify(self, point) -> tuple[int | None, str]:
+        """``(cell, verdict)`` for a grounded point.
+
+        ``covered``  - inside a cell's own grid square; a bot can stand here.
+        ``off_grid`` - no cell square covers it, but a cell one pitch away sits on
+                       the SAME PLANE (``OFF_GRID_Z``). The bot cannot stand
+                       exactly here, yet the ground runs on into a cell it can
+                       stand on. Resolution residue against an edge.
+        ``missing``  - anything else: ground the mesh does not represent, whether
+                       there is no cell nearby at all or the nearest one is at a
+                       height this surface does not simply continue into.
+
+        A 3x3 column scan is exhaustive: for ``q = floor(p / GRID)`` any cell
+        within ``GRID`` of ``p`` on an axis lands in ``q-1``, ``q`` or ``q+1``.
+        """
+        cx, cy = math.floor(point[0] / self.GRID), math.floor(point[1] / self.GRID)
+        covered: tuple[int, float] | None = None
+        residue: tuple[int, float] | None = None
         for dx in (-1, 0, 1):
             for dy in (-1, 0, 1):
                 for index in self.columns.get((cx + dx, cy + dy), ()):
                     cell = self.graph.cells[index]
-                    if (
-                        abs(cell[0] - point[0]) <= self.CELL_XY
-                        and abs(cell[1] - point[1]) <= self.CELL_XY
-                        and abs(cell[2] - point[2]) <= self.CELL_Z
-                    ):
-                        distance = (cell[0] - point[0]) ** 2 + (cell[1] - point[1]) ** 2
-                        if best_d is None or distance < best_d:
-                            best, best_d = self.graph.cell_ids[index], distance
-        return best
+                    ddx = abs(cell[0] - point[0])
+                    ddy = abs(cell[1] - point[1])
+                    ddz = abs(cell[2] - point[2])
+                    if ddx > self.NEAR_XY or ddy > self.NEAR_XY:
+                        continue
+                    distance = ddx * ddx + ddy * ddy
+                    if ddx <= self.CELL_XY and ddy <= self.CELL_XY and ddz <= self.CELL_Z:
+                        if covered is None or distance < covered[1]:
+                            covered = (self.graph.cell_ids[index], distance)
+                    elif ddz <= self.OFF_GRID_Z:
+                        if residue is None or distance < residue[1]:
+                            residue = (self.graph.cell_ids[index], distance)
+        if covered is not None:
+            return covered[0], self.COVERED
+        if residue is not None:
+            return residue[0], self.OFF_GRID
+        return None, self.MISSING
+
+    def resolve(self, point) -> int | None:
+        """The cell a grounded point attributes to -- covered or off-grid alike.
+
+        Off-grid ground must still attribute, or a player hugging a wall breaks
+        the attribution chain and the next resolved cell is recorded as an
+        unlinked traversal from wherever the chain last held: a phantom missing
+        link hundreds of units long.
+        """
+        return self.classify(point)[0]
 
 
 @dataclass
@@ -165,6 +226,11 @@ class Attribution:
     # ground with no cell, traversals with no link. Rendered glowing red.
     missing_cells: dict = field(default_factory=dict)
     missing_links: list = field(default_factory=list)
+    # Ground the actor used that is continuous with a cell but lies outside any
+    # cell's own grid square -- the carve's resolution limit against an edge, not
+    # a hole. Reported apart from `missing_cells` so the red layer stays a list
+    # of things worth fixing.
+    off_grid_cells: dict = field(default_factory=dict)
 
     def reset(self) -> None:
         self.used_cells.clear()
@@ -178,6 +244,11 @@ class Attribution:
         self.missing_cells.setdefault(
             key, [round(position[0], 1), round(position[1], 1), round(position[2], 1)])
 
+    def note_off_grid(self, position) -> None:
+        key = (int(position[0] // 32), int(position[1] // 32), int(position[2] // 32))
+        self.off_grid_cells.setdefault(
+            key, [round(position[0], 1), round(position[1], 1), round(position[2], 1)])
+
     def note_missing_traversal(self, from_point, to_point) -> None:
         entry = {"from": [round(v, 1) for v in from_point],
                  "to": [round(v, 1) for v in to_point]}
@@ -186,7 +257,8 @@ class Attribution:
 
     def missing_payload(self) -> dict:
         return {"cells": [list(v) for v in self.missing_cells.values()],
-                "links": [dict(m) for m in self.missing_links]}
+                "links": [dict(m) for m in self.missing_links],
+                "off_grid": [list(v) for v in self.off_grid_cells.values()]}
 
     def observe(self, cell: int, now: float, graph: GraphContract) -> None:
         self.used_cells.add(cell)
@@ -276,6 +348,7 @@ class LiveBridge:
         self._proxy_server: asyncio.AbstractServer | None = None
         self._ws_server: asyncio.AbstractServer | None = None
         self._send_lock = asyncio.Lock()
+        self._msgpack = False          # decided by the probe in connect_upstream
         self._next_sid = 1
         self.pending: dict[int, Pending] = {}
         self.proxy_clients: set[ProxyClient] = set()
@@ -296,25 +369,86 @@ class LiveBridge:
         self._player_names: dict[int, str] = {}
         self.stop_event = asyncio.Event()
 
-    async def connect_upstream(self) -> None:
+    async def _open(self):
         # ra_trial_result-event bär upp till 4096 samples (~350 KB på EN rad) —
         # asyncios default-limit (64 KB) får readline att kasta ValueError och
         # döda bryggan mitt i en gate-körning (2026-07-23 em: live-vyn dog för
         # ägaren). 4 MiB rymmer värsta kända eventet med bred marginal.
-        self._upstream_reader, self._upstream_writer = await asyncio.open_connection(
+        return await asyncio.open_connection(
             self.control_host, self.control_port, limit=4 * 1024 * 1024
         )
+
+    async def connect_upstream(self) -> None:
+        # The engine moved the control channel from newline-JSON to length-framed msgpack.
+        # Probe msgpack first (a text server simply never answers an unterminated frame, so
+        # the probe times out cleanly; a msgpack server resets a text line, which is not
+        # recoverable) and keep the legacy path for older builds. `core` owns both the
+        # verb->Cmd parsing and the Msg->legacy-dict translation, so everything downstream
+        # of the reader keeps seeing exactly the dict shape it always saw.
+        self._upstream_reader, self._upstream_writer = await self._open()
+        self._msgpack = False
+        try:
+            self._upstream_writer.write(mpwire.pack_frame({"id": 0, "cmd": "Status"}))
+            await self._upstream_writer.drain()
+            head = await asyncio.wait_for(self._upstream_reader.readexactly(4), MSGPACK_PROBE_S)
+            # A length prefix came back, so this IS a msgpack server. Commit now:
+            # falling back to text from here would write a line to a framed reader,
+            # which it cannot resynchronise from. Only a header that never arrives
+            # means legacy -- the body gets the connection's own patience, and a
+            # slow one must not be misread as a text server.
+            self._msgpack = True
+            for _ in range(8):
+                size = int.from_bytes(head, "little")
+                if size > mpwire.MAX_FRAME:
+                    raise ValueError(f"handshake frame of {size} bytes exceeds MAX_FRAME")
+                message = _ft._translate_msg(mpwire.unpackb(
+                    await self._upstream_reader.readexactly(size)))
+                if message.get("id") == 0:
+                    break
+                # An event the engine had queued before our Status. The reader task
+                # is not up yet, so it has nowhere to go.
+                LOG.info("dropping pre-handshake event %r", message.get("ev"))
+                head = await self._upstream_reader.readexactly(4)
+        except (asyncio.TimeoutError, asyncio.IncompleteReadError, ValueError, TypeError,
+                KeyError, OSError) as exc:
+            if self._msgpack:
+                # It answered with a frame and then went wrong. That is a broken
+                # msgpack peer, not a text one; retrying as text writes a line it
+                # can never resynchronise from.
+                raise
+            LOG.info("control channel is legacy text (%s)", type(exc).__name__)
+            self._upstream_writer.close()
+            self._upstream_reader, self._upstream_writer = await self._open()
+        LOG.info("control wire: %s", "msgpack" if self._msgpack else "text")
         self._reader_task = asyncio.create_task(self._upstream_loop(), name="control-reader")
+
+    async def _read_upstream(self) -> dict[str, Any] | None:
+        """One upstream message in the legacy dict shape, or None at end of stream."""
+        assert self._upstream_reader is not None
+        if not self._msgpack:
+            line = await self._upstream_reader.readline()
+            if not line:
+                return None
+            try:
+                return json.loads(line)
+            except json.JSONDecodeError:
+                LOG.warning("discarding invalid upstream JSON: %r", line[:200])
+                return {}
+        try:
+            head = await self._upstream_reader.readexactly(4)
+            body = await self._upstream_reader.readexactly(int.from_bytes(head, "little"))
+        except asyncio.IncompleteReadError:
+            return None
+        try:
+            return _ft._translate_msg(mpwire.unpackb(body))
+        except (ValueError, TypeError, KeyError) as exc:
+            LOG.warning("discarding undecodable upstream frame: %s", exc)
+            return {}
 
     async def _upstream_loop(self) -> None:
         assert self._upstream_reader is not None
         try:
-            while line := await self._upstream_reader.readline():
-                try:
-                    message = json.loads(line)
-                except json.JSONDecodeError:
-                    LOG.warning("discarding invalid upstream JSON: %r", line[:200])
-                    continue
+            while (message := await self._read_upstream()) is not None:
                 if "id" in message:
                     await self._route_reply(message)
                 elif "ev" in message:
@@ -415,11 +549,15 @@ class LiveBridge:
                     ent,
                     {"last_ground_pos": None, "airborne_from": None, "airborne_point": None},
                 )
-                resolved = self.graph_matcher.resolve(position) if on_ground else None
+                resolved, verdict = (
+                    self.graph_matcher.classify(position) if on_ground else (None, None)
+                )
                 if on_ground:
                     if resolved is None:
                         state.note_missing_ground(position)
                     else:
+                        if verdict == GraphMatcher.OFF_GRID:
+                            state.note_off_grid(position)
                         if (
                             aux["airborne_from"] is not None
                             and aux["airborne_from"] != resolved
@@ -467,7 +605,11 @@ class LiveBridge:
             self.pending[sid] = pending
             if isinstance(pending.owner, ProxyClient):
                 pending.owner.pending_sids.add(sid)
-            self._upstream_writer.write(f"{sid} {command}\n".encode("ascii"))
+            if self._msgpack:
+                self._upstream_writer.write(
+                    mpwire.pack_frame({"id": sid, "cmd": _ft._parse_verb(command)}))
+            else:
+                self._upstream_writer.write(f"{sid} {command}\n".encode("ascii"))
             await self._upstream_writer.drain()
             return sid
 

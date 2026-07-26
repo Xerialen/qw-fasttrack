@@ -1,0 +1,7 @@
+# Line endings are normalised in the repo; the worktree may be CRLF on Windows.
+# Without this a Windows editor rewriting a file shows up as a whole-file diff.
+* text=auto eol=lf
+*.png binary
+*.qwd binary
+*.mvd binary
+*.bsp binary

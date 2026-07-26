@@ -58,18 +58,23 @@ def build_timeline(demo_path: str, graph: GraphContract, player: int | None = No
     used_links: set[int] = set()
     missing_cells: dict[tuple, list[float]] = {}
     missing_links: list[dict] = []
+    off_grid_cells: dict[tuple, list[float]] = {}
 
     timeline = []
     airborne_from: int | None = None
     airborne_point = None
     for i, (t, x, y, z, speed) in enumerate(samples):
         grounded = mask[i]
-        cell = matcher.resolve((x, y, z)) if grounded else None
+        cell, verdict = matcher.classify((x, y, z)) if grounded else (None, None)
         if grounded:
             if cell is None:
                 key = (math.floor(x / MISS_SNAP), math.floor(y / MISS_SNAP), math.floor(z / MISS_SNAP))
                 missing_cells.setdefault(key, [round(x, 1), round(y, 1), round(z, 1)])
             else:
+                if verdict == GraphMatcher.OFF_GRID:
+                    key = (math.floor(x / MISS_SNAP), math.floor(y / MISS_SNAP),
+                           math.floor(z / MISS_SNAP))
+                    off_grid_cells.setdefault(key, [round(x, 1), round(y, 1), round(z, 1)])
                 if airborne_from is not None and airborne_from != cell:
                     hit = (graph.links_by_cells.get((airborne_from, cell), ())
                            or graph.fuzzy_links(airborne_from, cell))
@@ -96,7 +101,8 @@ def build_timeline(demo_path: str, graph: GraphContract, player: int | None = No
             "cell_id": cell,
             "used": {"cells": sorted(used_cells), "links": sorted(used_links)},
             "missing": {"cells": [list(v) for v in missing_cells.values()],
-                        "links": [dict(m) for m in missing_links]},
+                        "links": [dict(m) for m in missing_links],
+                        "off_grid": [list(v) for v in off_grid_cells.values()]},
         })
     return timeline
 
@@ -371,6 +377,7 @@ class ReplayServer:
         final = self.timeline[-1]
         summary = {"missing_cells": len(final["missing"]["cells"]),
                    "missing_links": len(final["missing"]["links"]),
+                   "off_grid_cells": len(final["missing"].get("off_grid") or []),
                    "used_cells": len(final["used"]["cells"]),
                    "used_links": len(final["used"]["links"])}
         print(f"replay ready: ws={self.ws_port} duration={final['t']:.1f}s "

@@ -22,6 +22,8 @@ import urllib.request
 from pathlib import Path
 from typing import Callable
 
+import mpwire
+
 # Own port block — never the deck's (8765/8767) or the orchestration's
 # (27504/06/08/16/21) ports. Control = game + 450 by lab convention.
 GAME_PORT, CONTROL_PORT, QTV_PORT = 27530, 27980, 29530
@@ -102,6 +104,153 @@ class ControlError(RuntimeError):
     pass
 
 
+class NotSupported(ControlError):
+    """A text control verb with no a293067 msgpack equivalent (lab-fork-only:
+    ra_trial/ra_spawn/sng_mega*/sjtrace/planrjraw/plancell/unlink/...). Raised
+    explicitly, naming the verb, instead of silently no-opping."""
+
+    def __init__(self, verb: str, note: str = ""):
+        self.verb = verb
+        suffix = f" ({note})" if note else ""
+        super().__init__(
+            f"verb {verb!r} has no a293067 msgpack-protocol equivalent{suffix}; "
+            "it is lab-fork-only and out of scope for this build")
+
+
+# --- msgpack control protocol (a293067 rtx-ctlproto) --------------------------
+# The engine moved the control channel from newline-text/JSON to length-framed
+# msgpack (crates/rtx-ctlproto). These helpers translate the text verb strings
+# qw-fasttrack still emits into the typed Cmd, and translate the typed Msg
+# replies/events back into the old JSON-reply dict shape the higher-level tools
+# read — so core.trial / patch_apply / ctl keep working unchanged.
+
+# Verbs that exist only in the lab fork; there is no a293067 Cmd for them.
+_MSGPACK_UNSUPPORTED = {
+    "unlink", "planrjraw", "ra_trial", "ra_spawn", "sjtrace",
+    "penalties", "sng_mega", "sng_mega_trial", "__ping__", "__latency__",
+    "__missing__",
+}
+
+# Async Event variant name -> the old snake_case `ev` label.
+_EVENT_NAMES = {
+    "Arrived": "arrived", "GotoStall": "goto_stall",
+    "RjResult": "rj_result", "FlyResult": "fly_result",
+}
+
+
+def _mp_vec3(tokens: list[str], i: int) -> list[float]:
+    return [float(tokens[i]), float(tokens[i + 1]), float(tokens[i + 2])]
+
+
+def _parse_verb(verb_and_args: str):
+    """Parse a qw-fasttrack text control verb into a typed a293067 `Cmd`
+    (a bare string for a unit variant, or a `{Variant: {fields}}` map). Raises
+    NotSupported for lab-fork-only verbs, ControlError for anything unknown."""
+    tokens = verb_and_args.split()
+    if not tokens:
+        raise ControlError("empty control command")
+    verb = tokens[0].lower()
+    if verb in _MSGPACK_UNSUPPORTED or verb.startswith("sng_mega"):
+        raise NotSupported(verb)
+    if verb == "status":
+        return "Status"
+    if verb in ("matchstart", "match_start"):
+        return "MatchStart"
+    if verb == "links":
+        return "Links"
+    if verb == "items":
+        return "Items"
+    if verb == "curls":
+        return "Curls"
+    if verb == "bsp":
+        return "Bsp"
+    if verb == "get":
+        return {"Get": {"name": tokens[1]}}
+    if verb == "set":
+        return {"Set": {"name": tokens[1], "value": " ".join(tokens[2:])}}
+    if verb == "teleport":
+        return {"Teleport": {"bot": int(tokens[1]), "pos": _mp_vec3(tokens, 2)}}
+    if verb == "goto":
+        return {"Goto": {"bot": int(tokens[1]), "pos": _mp_vec3(tokens, 2)}}
+    if verb == "hold":
+        return {"Hold": {"bot": int(tokens[1])}}
+    if verb == "stop":
+        return {"Stop": {"bot": int(tokens[1])}}
+    if verb == "route":
+        return {"Route": {"bot": int(tokens[1])}}
+    if verb == "cell":
+        return {"Cell": {"pos": _mp_vec3(tokens, 1)}}
+    if verb == "rj":
+        return {"Rj": {"bot": int(tokens[1]), "link": int(tokens[2])}}
+    if verb == "fly":
+        return {"Fly": {"bot": int(tokens[1]), "link": int(tokens[2])}}
+    if verb == "prep":
+        return {"Prep": {"bot": int(tokens[1]),
+                         "health": float(tokens[2]), "rockets": float(tokens[3])}}
+    if verb == "audit":
+        return {"Audit": {"bot": int(tokens[1]), "lines": int(tokens[2])}}
+    if verb == "curl":
+        return {"Curl": {"src": _mp_vec3(tokens, 1), "tgt": _mp_vec3(tokens, 4)}}
+    if verb == "probe":
+        return {"Probe": {"takeoff": _mp_vec3(tokens, 1), "tgt": _mp_vec3(tokens, 4),
+                          "psi0": float(tokens[7]), "runway": float(tokens[8])}}
+    if verb == "runcmd":
+        return {"RunCmd": {"raw": verb_and_args[len(tokens[0]):].strip()}}
+    if verb == "plancell":
+        # plancell <x y z> - index a walkable surface the column carve cannot sample.
+        # The server snaps z to the floor and wires walk/step links to same-height neighbours.
+        return {"PlanCell": {"pos": _mp_vec3(tokens, 1)}}
+    if verb == "plandrop":
+        # plandrop <from xyz> <to xyz> - a way OFF a planted shelf. Plant the shelf cell
+        # first: `from` resolves through `nearest`, which would otherwise pick the floor below.
+        return {"PlanDrop": {"from": _mp_vec3(tokens, 1), "to": _mp_vec3(tokens, 4)}}
+    if verb == "planlink":
+        # planlink <from xyz> <takeoff xyz> <tgt xyz> <v_req>
+        return {"PlanLink": {"from": _mp_vec3(tokens, 1), "takeoff": _mp_vec3(tokens, 4),
+                             "tgt": _mp_vec3(tokens, 7), "v_req": float(tokens[10])}}
+    raise ControlError(f"unknown control verb {verb!r}")
+
+
+def _translate_event(ev: dict) -> dict:
+    """{Variant: {fields}} async Event -> old {'ev': label, **fields} dict."""
+    name, fields = next(iter(ev.items()))
+    out = {"ev": _EVENT_NAMES.get(name, name.lower())}
+    if isinstance(fields, dict):
+        out.update(fields)
+    else:
+        out["value"] = fields
+    return out
+
+
+def _resp_data(ok):
+    """A typed `Resp` -> the `data` payload the old JSON replies carried. Unit
+    variants (`Queued`) arrive as a bare string; struct/tuple variants as a
+    one-key map whose value is the payload."""
+    if isinstance(ok, str):
+        return {ok.lower(): True}
+    if isinstance(ok, dict) and len(ok) == 1:
+        return next(iter(ok.values()))
+    return ok
+
+
+def _translate_msg(msg: dict) -> dict:
+    """A decoded a293067 `Msg` -> the normalized dict shape Control expects:
+    an event carries `ev`; a reply carries `id`/`ok`/`data` (or `error`)."""
+    if not isinstance(msg, dict):
+        raise ControlError(f"unexpected control frame: {msg!r}")
+    if "Event" in msg:
+        return _translate_event(msg["Event"])
+    if "Reply" in msg:
+        reply = msg["Reply"]
+        rid = reply.get("id")
+        result = reply.get("result")
+        if isinstance(result, dict) and "Ok" in result:
+            return {"id": rid, "ok": True, "data": _resp_data(result["Ok"])}
+        err = result.get("Err") if isinstance(result, dict) else result
+        return {"id": rid, "ok": False, "error": err}
+    raise ControlError(f"unexpected control message: {msg!r}")
+
+
 def _read_live_state() -> dict | None:
     try:
         state = json.loads(LIVE_STATE.read_text(encoding="utf-8"))
@@ -145,15 +294,27 @@ def _connect_live_proxy(state: dict, timeout: float) -> socket.socket:
 
 
 class Control:
-    """Newline-JSON control client (single connection, request/reply + events)."""
+    """Single-connection control client — the one reply-reader on the port.
+
+    Speaks two wires transparently: the a293067 length-framed msgpack protocol
+    (crates/rtx-ctlproto) and the legacy newline-JSON. The higher-level API is
+    unchanged: `request(verb_string)` returns the old `{'id','ok','data'}` dict
+    and events land in `.events` as `{'ev': label, ...}` — the msgpack path
+    parses the text verb into a typed Cmd, frames it, and translates the reply
+    back. Mode is auto-detected via a Status handshake, or forced with the
+    FASTTRACK_MSGPACK env var (1 = msgpack, 0 = legacy text). A live-bridge
+    proxy connection is always legacy text (the proxy is not migrated)."""
 
     def __init__(self, host: str = "127.0.0.1", port: int = CONTROL_PORT, timeout: float = 30.0):
+        self._host, self._port, self._timeout = host, port, timeout
         self._socket = None
+        via_proxy = False
         if host == "127.0.0.1" and port == CONTROL_PORT:
             state = _read_live_state()
             if state is not None:
                 try:
                     self._socket = _connect_live_proxy(state, min(timeout, 1.0))
+                    via_proxy = True
                 except (OSError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
                     _remove_live_state(state.get("nonce"))
                     print(
@@ -165,6 +326,48 @@ class Control:
         self._next_id = 1
         self._buf = b""
         self.events: list[dict] = []
+        # The live-bridge proxy is not msgpack-migrated; it always speaks text.
+        self._msgpack = False if via_proxy else self._detect_mode()
+
+    def _detect_mode(self) -> bool:
+        env = os.environ.get("FASTTRACK_MSGPACK")
+        if env == "1":
+            return True
+        if env == "0":
+            return False
+        # Auto-probe: send a framed msgpack Status (id 0) and see if a valid
+        # Msg frame comes back. A legacy text server never answers a frame with
+        # no newline, so we time out and reconnect clean for the text path.
+        try:
+            self._socket.sendall(mpwire.pack_frame({"id": 0, "cmd": "Status"}))
+            deadline = time.monotonic() + min(self._timeout, 3.0)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                body = self._read_frame(remaining)
+                if body is None:
+                    break
+                msg = mpwire.unpackb(body)
+                if isinstance(msg, dict) and "Reply" in msg:
+                    return True  # id-0 probe reply consumed
+                if isinstance(msg, dict) and "Event" in msg:
+                    self.events.append(_translate_event(msg["Event"]))
+                    continue
+                break
+        except (OSError, ValueError, ControlError):
+            pass
+        self._reconnect_text()
+        return False
+
+    def _reconnect_text(self) -> None:
+        try:
+            self._socket.close()
+        except OSError:
+            pass
+        self._socket = socket.create_connection(
+            (self._host, self._port), timeout=self._timeout)
+        self._buf = b""
 
     def close(self) -> None:
         try:
@@ -172,30 +375,64 @@ class Control:
         except OSError:
             pass
 
+    def _fill(self, deadline: float) -> bool:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        self._socket.settimeout(max(remaining, 0.05))
+        try:
+            chunk = self._socket.recv(65536)
+        except (TimeoutError, socket.timeout):
+            return False
+        if not chunk:
+            raise ControlError("control connection closed")
+        self._buf += chunk
+        return True
+
+    def _read_frame(self, timeout: float):
+        """Read one `[u32 LE len][msgpack body]` frame's body, or None on
+        timeout (partial bytes are retained on `self._buf` for the next read)."""
+        deadline = time.monotonic() + timeout
+        while len(self._buf) < 4:
+            if not self._fill(deadline):
+                return None
+        n = int.from_bytes(self._buf[:4], "little")
+        if n > mpwire.MAX_FRAME:
+            raise ControlError("control frame length too large")
+        while len(self._buf) < 4 + n:
+            if not self._fill(deadline):
+                return None
+        body = bytes(self._buf[4:4 + n])
+        self._buf = self._buf[4 + n:]
+        return body
+
     def _read(self, timeout: float):
+        """One normalized message ({'ev': ...} or {'id','ok','data'/'error'}),
+        or None on timeout — same shape in both wire modes."""
+        if self._msgpack:
+            body = self._read_frame(timeout)
+            if body is None:
+                return None
+            return _translate_msg(mpwire.unpackb(body))
         deadline = time.monotonic() + timeout
         while b"\n" not in self._buf:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            if not self._fill(deadline):
                 return None
-            self._socket.settimeout(max(remaining, 0.05))
-            try:
-                chunk = self._socket.recv(65536)
-            except (TimeoutError, socket.timeout):
-                return None
-            if not chunk:
-                raise ControlError("control connection closed")
-            self._buf += chunk
         line, self._buf = self._buf.split(b"\n", 1)
         return json.loads(line.decode("utf-8", "replace"))
 
     def request(self, verb_and_args: str, timeout: float = 15.0,
                 before_send: Callable[[], None] | None = None) -> dict:
+        # Parse before consuming an id so an unsupported verb fails fast/clean.
+        cmd = _parse_verb(verb_and_args) if self._msgpack else None
         rid = self._next_id
         self._next_id += 1
         if before_send is not None:
             before_send()
-        self._socket.sendall(f"{rid} {verb_and_args}\n".encode("ascii"))
+        if self._msgpack:
+            self._socket.sendall(mpwire.pack_frame({"id": rid, "cmd": cmd}))
+        else:
+            self._socket.sendall(f"{rid} {verb_and_args}\n".encode("ascii"))
         deadline = time.monotonic() + timeout
         while True:
             remaining = deadline - time.monotonic()
