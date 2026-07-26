@@ -131,10 +131,13 @@ _MSGPACK_UNSUPPORTED = {
     "__missing__",
 }
 
-# Async Event variant name -> the old snake_case `ev` label.
+# Async Event variant name -> the old snake_case `ev` label. An engine build
+# newer than this table is normal (the lab runs ahead of it), so an unlisted
+# variant is lowercased rather than rejected — see _translate_event.
 _EVENT_NAMES = {
     "Arrived": "arrived", "GotoStall": "goto_stall",
     "RjResult": "rj_result", "FlyResult": "fly_result",
+    "Pmove": "pmove", "BotStall": "bot_stall", "SeatHeartbeat": "seat_heartbeat",
 }
 
 
@@ -211,10 +214,18 @@ def _parse_verb(verb_and_args: str):
     raise ControlError(f"unknown control verb {verb!r}")
 
 
-def _translate_event(ev: dict) -> dict:
-    """{Variant: {fields}} async Event -> old {'ev': label, **fields} dict."""
+def _translate_event(ev) -> dict:
+    """{Variant: {fields}} async Event -> old {'ev': label, **fields} dict.
+
+    Deliberately total: an event this build has never heard of is a *label it
+    does not know*, not a protocol error. The engine gains variants faster than
+    this table does, and a tool waiting on `arrived` must not die because an
+    unrelated telemetry event arrived on the same socket. A unit variant
+    (msgpack sends it as a bare string) carries no fields at all."""
+    if not isinstance(ev, dict):
+        return {"ev": _EVENT_NAMES.get(str(ev), str(ev).lower())}
     name, fields = next(iter(ev.items()))
-    out = {"ev": _EVENT_NAMES.get(name, name.lower())}
+    out = {"ev": _EVENT_NAMES.get(name, str(name).lower())}
     if isinstance(fields, dict):
         out.update(fields)
     else:

@@ -15,6 +15,12 @@ Helper scripts — setup, data wrangling, validation, automation, one-off toolin
 - `jump_receipt.py` — tail:ar pmove-JSONL:en och kvitterar varje hopp ≥150u
   live (takeoff→landning, distans, luftfas, serverfart) med grov
   tele-diskriminator. Används när ägaren registrerar hopp på beställning.
+- `stall_recorder.py [--out FIL] [--lines N] [--bot N] [--max N]` — lyssnar på
+  `bot_stall` (rtx styrvakthundarna: displacement / progress / speedjump_stall /
+  air_commit_off / air_commit_timeout / prestrafe_deficit) och parar varje stall
+  med `audit <bot> <lines>` hämtad direkt efteråt, en JSONL-rad per stall.
+  Stallet säger var boten fastnade, auditsvansen vad den försökte precis innan —
+  var för sig är de gissningar. Kräver en rtx-motor med BotStall-eventet.
 
 Document how to run anything non-obvious in `docs/environment.md` (the runbook).
 Changes here count as code changes for the documentation contract (see
