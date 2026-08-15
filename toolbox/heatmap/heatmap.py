@@ -58,12 +58,13 @@ def zcolor(z, minz, maxz):
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
-def select_clusters(obd, population, klass):
-    """Returnerar (karta, unknown, cellinfo).
+def select_clusters(obd, population, klass, cell_index):
+    """Returnerar (karta, unknown).
 
     karta:    {cell-id-int: {"raknare": int, "kluster": {id: n},
                              "klasser": set(), "n_kluster": int}}
     unknown:  [kluster, ...] med cell == "unknown"
+    cell_index: {cell-id: index i cells} (cell_ids-uppslag, ej identisk)
     """
     pops = obd.get("populationer", {})
     if population not in pops:
@@ -85,6 +86,9 @@ def select_clusters(obd, population, klass):
             cid = int(cell)
         except ValueError:
             die(f"kluster {k.get('kluster_id')}: ej-numerisk cell '{cell}'")
+        if cid not in cell_index:
+            die(f"kluster {k.get('kluster_id')}: cell {cid} finns inte i "
+                f"grafens cell_ids")
         e = karta.setdefault(
             cid, {"raknare": 0, "kluster": {}, "klasser": set(), "n_kluster": 0})
         e["raknare"] += n
@@ -105,7 +109,7 @@ def svg_text(lines, x, y, line_h=18):
 
 
 def build_svg(graph, karta, unknown, population, klass,
-              n_celler_totala, n_kluster_karta):
+              cell_index, n_celler_totala, n_kluster_karta):
     cells = graph["cells"]
     grid = float(graph.get("grid", 32.0))
 
@@ -147,8 +151,8 @@ def build_svg(graph, karta, unknown, population, klass,
     for cid in sorted(karta):
         e = karta[cid]
         t = 1.0 if max_r == 0 else e["raknare"] / max_r
-        c = cells[cid]
-        title = (f"cell {cid} — {e['raknare']} misslyckade forsok, "
+        c = cells[cell_index[cid]]
+        title = (f"cell {cid} — {e['raknare']} misslyckade försök, "
                  f"{e['n_kluster']} kluster")
         parts.append(
             f'<rect x="{sx(c[0]) - cs / 2:.1f}" y="{sy(c[1]) - cs / 2:.1f}" '
@@ -160,9 +164,9 @@ def build_svg(graph, karta, unknown, population, klass,
     lines = [
         f"population: {population}",
         f"klass: {klass}",
-        f"fargade celler: {len(karta)} av {n_celler_totala}",
-        f"kluster pa kartan: {n_kluster_karta}",
-        f"okand cell: {len(unknown)} kluster",
+        f"färgade celler: {len(karta)} av {n_celler_totala}",
+        f"kluster på kartan: {n_kluster_karta}",
+        f"okänd cell: {len(unknown)} kluster",
     ]
     parts.extend(svg_text(lines, W - PAD - 360, PAD + 14))
     parts.append("</svg>")
@@ -229,14 +233,19 @@ def main(argv=None):
         die(f"graf: forvantad schema qw-nav-graph/1, "
             f"fann {graph.get('schema')!r}")
 
-    karta, unknown = select_clusters(obd, a.population, a.klass)
+    # Celluppslag via cell_ids (id -> index). Index och id är inte
+    # identiska i allmänhet: grafen far ha hol i id-raden, sa ritning
+    # gors alltid pa cells[cell_index[id]].
+    cell_index = {}
+    for i, cid in enumerate(graph.get("cell_ids", [])):
+        cell_index[int(cid)] = i
+
+    karta, unknown = select_clusters(obd, a.population, a.klass, cell_index)
     n_cells = len(graph["cells"])
-    for cid in karta:
-        if not 0 <= cid < n_cells:
-            die(f"cell {cid} finns inte i grafen ({n_cells} celler)")
 
     svg = build_svg(graph, karta, unknown, a.population, a.klass,
-                    n_cells, sum(e["n_kluster"] for e in karta.values()))
+                    cell_index, n_cells,
+                    sum(e["n_kluster"] for e in karta.values()))
     with open(a.out_svg, "w", encoding="utf-8") as f:
         f.write(svg)
 

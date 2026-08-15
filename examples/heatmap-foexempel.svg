@@ -4624,14 +4624,15 @@
 <rect x="246.2" y="808.1" width="16.2" height="16.2" fill="#287684" opacity="0.25"/>
 </g>
 <g class="heat">
-<rect x="80.4" y="420.0" width="16.2" height="16.2" fill="#ffe22e" opacity="0.9"><title>cell 120 — 6 misslyckade forsok, 1 kluster</title></rect>
-<rect x="986.0" y="31.9" width="16.2" height="16.2" fill="#5f6c44" opacity="0.9"><title>cell 2500 — 2 misslyckade forsok, 1 kluster</title></rect>
+<rect x="80.4" y="420.0" width="16.2" height="16.2" fill="#ffe22e" opacity="0.9"><title>cell 120 — 6 misslyckade försök, 1 kluster</title></rect>
+<rect x="80.4" y="403.8" width="16.2" height="16.2" fill="#5f6c44" opacity="0.9"><title>cell 121 — 2 misslyckade försök, 1 kluster</title></rect>
+<rect x="986.0" y="31.9" width="16.2" height="16.2" fill="#5f6c44" opacity="0.9"><title>cell 2500 — 2 misslyckade försök, 1 kluster</title></rect>
 </g>
 <g class="info" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="14" fill="#cfe3ff">
 <text x="1200.0" y="54.0">population: kedjad_N75</text>
 <text x="1200.0" y="72.0">klass: alla</text>
-<text x="1200.0" y="90.0">fargade celler: 2 av 4621</text>
-<text x="1200.0" y="108.0">kluster pa kartan: 2</text>
-<text x="1200.0" y="126.0">okand cell: 1 kluster</text>
+<text x="1200.0" y="90.0">färgade celler: 3 av 4621</text>
+<text x="1200.0" y="108.0">kluster på kartan: 3</text>
+<text x="1200.0" y="126.0">okänd cell: 1 kluster</text>
 </g>
 </svg>
