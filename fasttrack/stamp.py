@@ -63,7 +63,8 @@ def canonical_inventory(doc: dict) -> bytes:
         lines.append(f"C\t{cid}\t{int(c[0])}\t{int(c[1])}\t{int(c[2])}")
     lrecs = []
     for l in doc["links"]:
-        t = 1 if l.get("traversable", True) else 0
+        t = l.get("T", l.get("traversable", 1))
+        t = 0 if t in (0, False) else 1
         lrecs.append((int(l["from"]), int(l["to_cell"]), str(l["kind"]).lower(), t))
     lrecs.sort()
     for src, dst, kind, t in lrecs:
@@ -85,16 +86,19 @@ def _build_graph_from_doc(d: dict, path: Path) -> GraphContract:
     raw = Path(path).read_bytes()
     cells = [list(c) for c in d["cells"]]
     cell_ids = [int(x) for x in d["cell_ids"]]
-    link_ids = [int(x) for x in d["link_ids"]]
     id_to_idx = {cid: i for i, cid in enumerate(cell_ids)}
     links: list[list] = []
+    link_ids: list[int] = []
     links_by_cells: dict[tuple[int, int], list[int]] = {}
-    for lid, lk in zip(link_ids, d["links"]):
+    for lid, lk in zip(d["link_ids"], d["links"]):
+        if lk.get("T", 1) == 0:
+            continue  # rensad ur adjacensen (teleport-trigger) — ej traverserbar
         src = int(lk["from"])
         dst = int(lk["to_cell"])
         kind = str(lk["kind"])
         cost = float(lk.get("cost", 0.0))
         links.append([id_to_idx[src], id_to_idx[dst], kind, cost])
+        link_ids.append(int(lid))
         links_by_cells.setdefault((src, dst), []).append(int(lid))
     return GraphContract(
         path=Path(path),
