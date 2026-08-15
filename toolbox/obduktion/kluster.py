@@ -112,7 +112,12 @@ def _kluster_from(members: list[dict]) -> dict:
     lank = members[0]["lank"] if len(lanks) == 1 else "unknown"
     klass = members[0]["klass"] if len(klasser) == 1 else "unknown"
     binds = {m["bind"] for m in members}
-    bind = "stamped" if binds == {"stamped"} else "unknown"
+    if binds == {"stamped"}:
+        bind = "stamped"
+    elif binds <= {"stamped", "fallback"} and binds:
+        bind = "fallback" if "fallback" in binds else "stamped"
+    else:
+        bind = "unknown"
     forsok = sorted({m["forsok_id"] for m in members})
     hids = sorted(m["id"] for m in members)
     atgard = klass in ATGARD_KLASSER

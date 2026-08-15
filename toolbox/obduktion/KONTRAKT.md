@@ -4,6 +4,10 @@ Schema **v3** (I-justering efter deepseek-korsreview). Ersätter v2.
 Skrivet **före** v3-koden. Semantikändringar: fall binds till landning,
 UT-peak återställs aldrig, stall utan origin emitteras inte.
 
+Policy (Fable, efter slice-dom): `_last_known_before`-fallback gäller
+både aldrig-landande fall och airborne-fastnad/timeout; `bind=fallback`.
+Västväggs-missing förblir unknown. Attr binds inte.
+
 Schema **v2** (bevarad): populationsmodellen — tre explicita
 populationer, aldrig filtrerade räknare utan etikett. Kapning A76–79
 är nämnaren N=75, inte händelseförlust.
@@ -51,17 +55,32 @@ fogas på mät-tickar.
 luft-triggerticken: första tick med `on_ground=true` efter Δz-slaget.
 xyz → cell-id gissas aldrig.
 
-**Aldrig-landande fall** (spåret slutar airborne; 2/86 i T1h-A): det
-finns ingen landningstick. Då binds händelsen till **senaste kända
-cell före fallet** (sista grounded tick med cell ≠ unknown före
-Δz-slaget). Det är en **fallback**, inte en landningscell — `bind` kan
-vara `stamped` men fältet betyder inte «här landade den».
+**`_last_known_before`-fallback** gäller **två** klasser, samma funktion
+(`_last_known_before` — sista grounded tick med cell ≠ unknown, inte
+`.attr.json`):
+
+1. **Aldrig-landande fall / avsett_drop** (spåret slutar airborne; ingen
+   landningstick). Cell från sista grounded tick före Δz-slaget.
+   `origin`/`t` från den ticken (ingen landningsplats finns).
+2. **Airborne-fastnad / timeout** (sista origin-tick har
+   `on_ground is not True`). Cell/länk från sista grounded tick före
+   slutet. `origin`/`t` stannar på sista ticken (där kroppen fastnade).
+
+I båda fallen är `bind` **`"fallback"`** — inte `"stamped"`. Det är
+inte en landningscell. Attr är inte bindkälla.
+
+**Västväggs-`missing` förblir unknown.** Sista tick `on_ground=true`
+men GraphMatcher `missing` (cell `"unknown"`, typ z=128-väggen) är
+en landning utan cell. Fallbacken appliceras **inte**. Att binda till
+`prev_stamped` / `drop_from_cell` vore att gissa landningscell —
+förbjudet. A:s `attr.cell_id` är unknown här; det får inte fyllas i.
 
 **`.attr.json` är inte per-händelse.** Spår A:s `attribution.cell_id` /
 `drop_landing_cell` är **en sammanfattning per FÖRSÖK**. Obducera
 binder **per händelse**. Olika landningar i samma försök kan därför få
 olika celler; det är inte en konflikt mot försökssammanfattningen, och
 `.attr.json` får inte skriva över enskilda händelsers landningscell.
+Klassningen läser **aldrig** `forsok["attr"]`.
 
 Stämpelfält läses om de **finns på landningsticken** (eller sidovagn):
 
@@ -70,8 +89,16 @@ Stämpelfält läses om de **finns på landningsticken** (eller sidovagn):
 - `navmesh_stamp`, `graph_contract`
 
 Saknas fältet, eller länk = `4294967295` (NOLINK): värdet är strängen
-`"unknown"`. `bind` är `"stamped"` endast när `cell != "unknown"`.
-**xyz → cell-id är förbjudet i spår I.** GraphMatcher är spår A.
+`"unknown"`. `bind` är en av:
+
+| `bind` | När |
+|---|---|
+| `stamped` | `cell != "unknown"` och källan är landningstick, grounded endpoint eller stall-tick |
+| `fallback` | `cell != "unknown"` men källan är `_last_known_before` (aldrig-landande fall **eller** airborne-fastnad/timeout) |
+| `unknown` | `cell == "unknown"` (saknad stamp, airborne utan känd grounded, västväggs-missing) |
+
+`"stamped"` betyder inte «fallback med cell». `"fallback"` betyder inte
+landning. **xyz → cell-id är förbjudet i spår I.** GraphMatcher är spår A.
 
 ## Klustring (v2-nyckel)
 
@@ -234,7 +261,9 @@ regim, drop_u, stall_reason, meta_utfall`
 - `stall_reason`: satts för `stall`, annars `"unknown"` om klassen är stall
   utan reason, annars `null`.
 - `t`: händelsetid (triggande tick). `fastnad`/`timeout` använder sista
-  tickens `t`.
+  origin-tickens `t` även vid `bind=fallback` (cellen är äldre, platsen
+  är slutet).
+- `bind`: `stamped` \| `fallback` \| `unknown` (se §Bindning).
 
 ## Kluster / åtgärd
 

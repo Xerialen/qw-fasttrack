@@ -11,7 +11,9 @@ sys.path.insert(0, str(ROOT))
 
 from toolbox.obduktion.adapter import extract_stamp  # noqa: E402
 from toolbox.obduktion.dump import dumps  # noqa: E402
-from toolbox.obduktion.klassa import peak_drop_events, stall_events  # noqa: E402
+from toolbox.obduktion.klassa import (  # noqa: E402
+    endpoint_event, finalize_handelse, klassa_forsok,
+    peak_drop_events, stall_events)
 from toolbox.obduktion.pipeline import obducera  # noqa: E402
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "mini_serie"
@@ -219,6 +221,7 @@ class TestLandingOchPeakReset(unittest.TestCase):
         self.assertEqual(len(evs), 1)
         self.assertEqual(evs[0]["cell"], "1375")
         self.assertEqual(evs[0]["origin"][2], 328.0)
+        self.assertEqual(evs[0]["bind"], "fallback")
 
     def test_stall_utan_origin_emitteras_inte(self):
         ticks = [{
@@ -256,3 +259,108 @@ class TestStallOchTimeout(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAirborneEndpointFallback(unittest.TestCase):
+    """Fable: airborne-fastnad = samma _last_known_before som aldrig-landande fall.
+
+    Västväggs-missing förblir unknown. attr är inte bindkälla.
+    """
+
+    def _tk(self, t, origin, on_ground, cell="unknown", lank="unknown"):
+        return {"t": t, "origin": origin, "on_ground": on_ground,
+                "cell": cell, "lank": lank,
+                "bind": "stamped" if cell != "unknown" else "unknown"}
+
+    def _forsok(self, utfall="fastnad", **extra):
+        row = {
+            "forsok_id": "B/c001/in_ring",
+            "arm": "B",
+            "ben": "in_ring",
+            "cykel": 1,
+            "regim": "kedjad",
+            "utfall": utfall,
+            "undanta_ut": False,
+        }
+        row.update(extra)
+        return row
+
+    def test_fastnad_airborne_binder_senaste_grounded(self):
+        ticks = [
+            self._tk(1.0, [256.0, -672.0, 328.0], True, "1416"),
+            self._tk(2.0, [256.0, -650.0, 290.0], False, "unknown"),
+        ]
+        ev = endpoint_event(ticks, "fastnad")
+        self.assertIsNotNone(ev)
+        self.assertEqual(ev["cell"], "1416")
+        self.assertEqual(ev["bind"], "fallback")
+        self.assertEqual(ev["origin"][2], 290.0)
+        self.assertEqual(ev["t"], 2.0)
+        evs = klassa_forsok(self._forsok(), ticks)
+        fast = [e for e in evs if e["klass"] == "fastnad"]
+        self.assertEqual(len(fast), 1)
+        self.assertEqual(fast[0]["cell"], "1416")
+        self.assertEqual(fast[0]["bind"], "fallback")
+        fin = finalize_handelse(fast[0], "H1")
+        self.assertEqual(fin["bind"], "fallback")
+        self.assertEqual(fin["cell"], "1416")
+
+    def test_timeout_airborne_samma_fallback(self):
+        ticks = [
+            self._tk(1.0, [10.0, 20.0, 56.0], True, "77", "12"),
+            self._tk(9.0, [11.0, 20.0, 80.0], False, "unknown"),
+        ]
+        ev = endpoint_event(ticks, "timeout")
+        self.assertEqual(ev["cell"], "77")
+        self.assertEqual(ev["lank"], "12")
+        self.assertEqual(ev["bind"], "fallback")
+        self.assertEqual(ev["origin"][2], 80.0)
+
+    def test_vastvagg_missing_forblir_unknown(self):
+        # sista tick grounded + missing: INTE fallback till avsats 806
+        ticks = [
+            self._tk(1.0, [200.0, -700.0, 328.0], True, "806"),
+            self._tk(3.0, [180.0, -700.0, 128.0], True, "unknown"),
+        ]
+        ev = endpoint_event(ticks, "fastnad")
+        self.assertEqual(ev["cell"], "unknown")
+        self.assertEqual(ev["bind"], "unknown")
+        self.assertEqual(ev["origin"][2], 128.0)
+        evs = klassa_forsok(self._forsok(), ticks)
+        fast = [e for e in evs if e["klass"] == "fastnad"]
+        self.assertEqual(fast[0]["cell"], "unknown")
+        self.assertEqual(fast[0]["bind"], "unknown")
+
+    def test_attr_ar_inte_bindkalla(self):
+        ticks = [
+            self._tk(1.0, [256.0, -672.0, 328.0], True, "1416"),
+            self._tk(2.0, [256.0, -650.0, 290.0], False, "unknown"),
+        ]
+        attr = {"attribution": {"cell_id": "9999"}, "cell_id": "9999"}
+        evs = klassa_forsok(self._forsok(attr=attr), ticks)
+        fast = [e for e in evs if e["klass"] == "fastnad"]
+        self.assertEqual(fast[0]["cell"], "1416")
+        self.assertNotEqual(fast[0]["cell"], "9999")
+        self.assertEqual(fast[0]["bind"], "fallback")
+
+    def test_airborne_utan_kand_grounded_ar_unknown(self):
+        ticks = [
+            self._tk(1.0, [0.0, 0.0, 328.0], True, "unknown"),
+            self._tk(2.0, [0.0, 0.0, 100.0], False, "unknown"),
+        ]
+        ev = endpoint_event(ticks, "fastnad")
+        self.assertEqual(ev["cell"], "unknown")
+        self.assertEqual(ev["bind"], "unknown")
+
+    def test_determinism_tva_ganger(self):
+        ticks = [
+            self._tk(1.0, [256.0, -672.0, 328.0], True, "1416"),
+            self._tk(2.0, [256.0, -650.0, 290.0], False, "unknown"),
+        ]
+        f = self._forsok()
+        a = klassa_forsok(f, ticks)
+        b = klassa_forsok(f, ticks)
+        self.assertEqual(a, b)
+        fa = [finalize_handelse(e, f"H{i}") for i, e in enumerate(a, 1)]
+        fb = [finalize_handelse(e, f"H{i}") for i, e in enumerate(b, 1)]
+        self.assertEqual(fa, fb)

@@ -4,6 +4,7 @@ from __future__ import annotations
 from .dump import cell_str, lank_str, q, q_xyz
 
 PEAK_DROP = 150.0
+BIND_OK = frozenset({"stamped", "unknown", "fallback"})
 
 
 def _first_grounded_after(ticks: list[dict], start_i: int) -> dict | None:
@@ -27,11 +28,16 @@ def _last_known_before(ticks: list[dict], start_i: int) -> dict | None:
     return found_stamped or found
 
 
+def _cell_of(tk: dict) -> str:
+    return tk.get("cell") or "unknown"
+
+
 def _bind_landing(ticks: list[dict], trigger_i: int, trigger: dict,
                   drop_u: float, klass: str) -> dict:
     """Landningstick om den finns; annars senaste kända cell före fallet.
 
-    .attr.json (per försök) skrivs inte över per-händelse-bindningen.
+    Fallback märks bind=fallback (inte stamped). .attr.json läses inte —
+    per-försöksattribution får inte skriva över per-händelse-bindningen.
     """
     land = trigger if trigger.get("on_ground") is True else None
     if land is None:
@@ -52,13 +58,17 @@ def _bind_landing(ticks: list[dict], trigger_i: int, trigger: dict,
     prev = _last_known_before(ticks, trigger_i)
     src = prev or trigger
     o = src.get("origin") or trigger.get("origin")
+    cell = src.get("cell") or "unknown"
+    # Fallback bara när det faktiskt finns en känd grounded cell.
+    bind = "fallback" if prev is not None and cell != "unknown" else (
+        src.get("bind") or "unknown")
     return {
         "klass": klass,
         "t": src.get("t"),
         "origin": list(o) if o else None,
-        "cell": src.get("cell") or "unknown",
+        "cell": cell,
         "lank": src.get("lank") or "unknown",
-        "bind": src.get("bind") or "unknown",
+        "bind": bind,
         "drop_u": drop_u,
         "stall_reason": None,
         "tick": src,
@@ -142,23 +152,50 @@ def lank_from_ev(ev: dict, tk: dict) -> str:
     return tk.get("lank") or "unknown"
 
 
-def endpoint_event(ticks: list[dict], klass: str) -> dict | None:
-    """fastnad/timeout vid sista tick med origin — ingen origo-placeholder."""
-    for tk in reversed(ticks):
-        o = tk.get("origin")
+def _last_origin_index(ticks: list[dict]) -> int | None:
+    for i in range(len(ticks) - 1, -1, -1):
+        o = ticks[i].get("origin")
         if o and len(o) >= 3:
-            return {
-                "klass": klass,
-                "t": tk.get("t"),
-                "origin": list(o),
-                "cell": tk.get("cell") or "unknown",
-                "lank": tk.get("lank") or "unknown",
-                "bind": tk.get("bind") or "unknown",
-                "drop_u": None,
-                "stall_reason": None,
-                "tick": tk,
-            }
+            return i
     return None
+
+
+def endpoint_event(ticks: list[dict], klass: str) -> dict | None:
+    """fastnad/timeout vid sista tick med origin.
+
+    Slutar kroppen airborne: samma _last_known_before-fallback som
+    aldrig-landande fall (cell från senaste grounded, bind=fallback).
+    t och origin stannar på sista ticken (där kroppen fastnade).
+    Grounded missing (västvägg z=128) förblir unknown — fallbacken
+    gäller bara airborne-slut, inte missing-landning. attr läses inte.
+    """
+    i = _last_origin_index(ticks)
+    if i is None:
+        return None
+    tk = ticks[i]
+    o = list(tk["origin"])
+    cell = tk.get("cell") or "unknown"
+    lank = tk.get("lank") or "unknown"
+    bind = tk.get("bind") or "unknown"
+    src = tk
+    if tk.get("on_ground") is not True:
+        prev = _last_known_before(ticks, i)
+        if prev is not None and _cell_of(prev) != "unknown":
+            cell = _cell_of(prev)
+            lank = prev.get("lank") or "unknown"
+            bind = "fallback"
+            src = prev
+    return {
+        "klass": klass,
+        "t": tk.get("t"),
+        "origin": o,
+        "cell": cell,
+        "lank": lank,
+        "bind": bind,
+        "drop_u": None,
+        "stall_reason": None,
+        "tick": src,
+    }
 
 
 def klassa_forsok(forsok: dict, ticks: list[dict]) -> list[dict]:
@@ -205,6 +242,16 @@ def finalize_handelse(ev: dict, hid: str) -> dict:
         stall_reason = None
     elif stall_reason is None:
         stall_reason = "unknown"
+    cell = ev["cell"] if ev["cell"] is not None else "unknown"
+    raw_bind = ev["bind"]
+    if cell == "unknown":
+        bind = "unknown"
+    elif raw_bind == "fallback":
+        bind = "fallback"
+    elif raw_bind == "stamped":
+        bind = "stamped"
+    else:
+        bind = "unknown"
     return {
         "id": hid,
         "forsok_id": ev["forsok_id"],
@@ -212,9 +259,9 @@ def finalize_handelse(ev: dict, hid: str) -> dict:
         "ben": ev["ben"],
         "cykel": ev["cykel"],
         "klass": ev["klass"],
-        "cell": ev["cell"] if ev["cell"] is not None else "unknown",
+        "cell": cell,
         "lank": ev["lank"] if ev["lank"] is not None else "unknown",
-        "bind": ev["bind"] if ev["bind"] in ("stamped", "unknown") else "unknown",
+        "bind": bind if bind in BIND_OK else "unknown",
         "t": q(ev["t"], 3),
         "origin": q_xyz(ev["origin"]),
         "regim": ev["regim"],
