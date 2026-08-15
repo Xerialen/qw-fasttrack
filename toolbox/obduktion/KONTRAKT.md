@@ -1,7 +1,11 @@
 # KONTRAKT: `obducera` åtgärdslista (verktygslada/obducera/2)
 
-Schema **v2** (I3-fix, 2026-08-15). Ersätter `verktygslada/obducera/1`.
-Skrivet **före** v2-implementation och före determinismtest mot v2.
+Schema **v2**. Ändring 2026-08-15 (tillägg, terra-datapak-revision):
+exkluderad-sektionen följer populationsmodellen — tre explicita
+populationer, aldrig filtrerade räknare utan etikett. Kapning A76–79
+är nämnaren N=75, inte händelseförlust.
+
+Skrivet **före** v2-koden som implementerar populationerna.
 Ägare: spår I (grok). Bindande för CLI, MCP och framtida webbklient.
 
 Paritet (REVISION 1): samma anrop ger **byte-identisk kanonikaliserad JSON**.
@@ -15,10 +19,9 @@ obducera --serie <dir> [--arm A|B] [--regim kedjad|alla|teleport]
          [--stamplar <dir>] [--ent 1] [--out -]
 ```
 
-Default `--regim kedjad` (E-punkten: kedjad är evidensfiltret).
-K-seriens teleportförsök har `regim=teleport` och faller bort ur
-`handelser`/`kluster`/`atgarder` under default — men **kastas inte**:
-de redovisas i `exkluderade_regimer` (se nedan).
+Default `--regim kedjad` (E-punkten: kedjad är evidensfiltret för
+toppnivåns `handelser`/`kluster`/`atgarder`). Information kastas inte:
+alla tre populationer redovisas alltid under `populationer`.
 
 ## Klasser (fältet `klass`, exakt dessa strängar)
 
@@ -31,8 +34,8 @@ de redovisas i `exkluderade_regimer` (se nedan).
 | `fastnad`     | försöks-meta `utfall` ∈ {`fastnad`, `fall_plus_fastnad`} |
 
 Ingen annan klass emitteras. Lyckade försök utan detektorträff ger
-noll händelser. `ogiltig_tic` / `kasserad` exkluderas helt (varken täljare,
-evidens eller `exkluderade_regimer` — de är ogiltig data, inte en regim).
+noll händelser. `ogiltig_tic` / `kasserad` exkluderas helt (inte en
+population — ogiltig data).
 
 ## Bindning (cell / länk) — gissa aldrig
 
@@ -65,50 +68,79 @@ Varje kluster bär `arm` och `ben`: det unika värdet om alla medlemmar
 delar det, annars strängen `"mixed"` (kan bara uppstå på stämplade
 kluster som inte splittas på sida/rutt).
 
+Varje kluster och varje åtgärdsrad bär **`population`** (etiketten
+nedan). Räknare utan populationsetikett är kontraktsbrott.
+
+## Kapning (T1h-nämnare)
+
+När serien är T1h-layout (cykelkataloger med de sex benen
+`ut_ring, in_ring, ut_tunnel, in_tunnel, ut_vast, in_vast`) är
+`N = min(n_hela_A, n_hela_B)` över armar som har minst en hel cykel
+(samma regel som `timtest_rapport.py`: första N hela cykler).
+Försök med `cykel > N` tillhör **ingen** population — de är kapning
+(A76–79 när B stannar på 75), inte en regim.
+
+`kap`:
+
+```
+n                 int | null     # N, eller null om ingen cykelkapning
+per_arm           {A?: int, B?: int}   # n_hela per arm
+kastade_cykler    {A?: [int, ...], B?: [int, ...]}
+```
+
+K-layout / ofullständig fixtur utan hela cykler: `n = null`, ingen
+cykel kastas.
+
+## Populationer (terra: alltid tre, samma räknarstruktur)
+
+`populationer` har **exakt tre** nycklar, alltid närvarande (tom
+population har nollor + tomma arrayer):
+
+| nyckel | medlemmar efter kap |
+|---|---|
+| `alla_giltiga_N{N}` | alla giltiga försök i kapad mängd |
+| `kedjad_N{N}` | `start`/`regim` = kedjad |
+| `teleport_efter_fel_N{N}` | `start` = teleport_efter_fel (intern regim `teleport`) |
+
+När `kap.n` är null skrivs `Nall` i stället för talet (`alla_giltiga_Nall`,
+…). T1h med N=75 ger exakt etiketterna `alla_giltiga_N75`, `kedjad_N75`,
+`teleport_efter_fel_N75`.
+
+Varje population:
+
+```
+population        etiketten (samma som nyckeln)
+n_kap             int | null
+n_forsok, n_handelser, n_kluster
+n_fall, n_avsett_drop, n_stall, n_timeout, n_fastnad
+bind_statistik    {stamplade, unknown}
+handelser         [Handelse, ...]
+kluster           [Kluster & {population}, ...]
+```
+
+Alla nio räknare är alltid närvarande. `atgarder` ligger **inte** i
+populationen — åtgärdslistan är evidensfiltrerad (default kedjad) på
+rotnivå, och varje rad bär samma `population`-etikett.
+
+`--regim kedjad` (default): rotens `handelser`/`kluster`/`atgarder` är
+identiska med `populationer.kedjad_N{N}` (samma id). `--regim alla`
+pekar roten på `alla_giltiga_*`. `--regim teleport` pekar roten på
+`teleport_efter_fel_*`.
+
+Jämför aldrig `kedjad_*`-räknare med paketets/facits alla-giltiga
+huvudtal — de är olika populationer och bär olika etiketter.
+
 ## Åtgärdslistan
 
-`atgarder` = kluster **ur den filtrerade (default kedjad) mängden** med
-`klass` ∈ {`fall`, `fastnad`, `timeout`, `stall`} sorterade efter:
+`atgarder` = kluster ur **evidenspopulationen** (default `kedjad_N{N}`)
+med `klass` ∈ {`fall`, `fastnad`, `timeout`, `stall`} sorterade efter:
 
 1. `n_forsok` fallande
 2. `n_handelser` fallande
 3. `kluster_id` stigande
 
 `avsett_drop` finns i `handelser` och `kluster` men **inte** i `atgarder`
-(`atgard_kandidat=false`).
-
-`prio` är 1-baserat löpnummer i den sorterade åtgärdslistan (1 = högst).
-
-## Exkluderade regimer (v2, Fables beslut på I3)
-
-Kedjad-filtret förblir default. Försök som filtret tar bort (t.ex.
-`teleport` / `teleport_efter_fel` under `--regim kedjad`) klassas och
-klustras **identiskt** men landar i sektionen `exkluderade_regimer`,
-aldrig i `handelser`/`kluster`/`atgarder`.
-
-Sektionen har samma räknarstruktur som huvudutfallet:
-
-```
-n_forsok          int
-n_handelser       int
-n_kluster         int
-bind_statistik    {stamplade, unknown}   # ticks i de bortfiltrerade försöken
-per_regim         { <regim>: Raknare, ... }   # lexikografiska nycklar
-handelser         [Handelse, ...]        # id-prefix X
-kluster           [Kluster, ...]         # kluster_id-prefix XK
-```
-
-`Raknare`:
-
-```
-n_forsok, n_handelser, n_kluster,
-n_fall, n_avsett_drop, n_stall, n_timeout, n_fastnad
-```
-
-Alla nio räknare är alltid närvarande (0 om tomt). Vid `--regim alla`
-är sektionen närvarande men tom (alla noll, tomma arrayer, tom `per_regim`).
-
-`atgarder` finns **inte** i sektionen — åtgärdslistan är evidensfiltrerad.
+(`atgard_kandidat=false`). `prio` är 1-baserat (1 = högst).
 
 ## Serialisering (byte-identitet)
 
@@ -129,14 +161,16 @@ Alla nio räknare är alltid närvarande (0 om tomt). Vid `--regim alla`
    Heltal förblir heltal. `null` tillåts bara där schemat säger Optional.
 
 4. Identiteter är strängar: `cell`, `lank`, `forsok_id`, `handelse_id`,
-   `kluster_id`, `arm`, `ben`. Numeriska cell/länk-id skrivs utan decimal
-   (`"48136"`).
-5. Behållna händelser: `handelse_id` = `H` + 4-siffrig sekvens.
-   Exkluderade: `X` + 4-siffrig (egen räkning, samma sortering).
-   Behållna kluster: `K` + 4-siffrig. Exkluderade: `XK` + 4-siffrig.
+   `kluster_id`, `arm`, `ben`, `population`. Numeriska cell/länk-id
+   skrivs utan decimal (`"48136"`).
+5. Id-prefix per population: `alla_giltiga` → `G`/`GK`; `kedjad` →
+   `H`/`K`; `teleport_efter_fel` → `X`/`XK`. Rotens listor återanvänder
+   evidenspopulationens id (ingen andra numrering).
 6. Arrayer `forsok_id` och `handelse_id` inuti ett kluster: lexikografiskt unika.
 7. Förbjudna fält i kanonisk utdata: `generated_at`, `host`, `path` (absolut),
    `request_id`, `duration_ms`. `serie` är katalogens **basnamn**, inte sökväg.
+8. `populationer`-objektets nycklar är de tre etiketterna, lexikografiskt
+   via `sort_keys` (`alla_giltiga_*`, `kedjad_*`, `teleport_efter_fel_*`).
 
 ## Rotobjekt
 
@@ -145,19 +179,26 @@ schema               "verktygslada/obducera/2"
 kommando             "obducera"
 serie                basnamn
 arm                  "A" | "B" | "AB"
-regim                det filter som kördes
+regim                det filter som styr rotens listor
 graph_contract       "qw-nav-graph/1" | "unknown"
 navmesh_stamp        objekt | "unknown"
-bind_statistik       {stamplade, unknown}   # ticks i BEHÅLLNA försök
-filter               {regim, n_forsok_in, n_forsok_behallna, n_forsok_exkluderade}
-handelser            [Handelse, ...]
-kluster              [Kluster, ...]
-atgarder             [Kluster & {prio: int}, ...]
-exkluderade_regimer  objekt (se ovan)
+bind_statistik       {stamplade, unknown}   # ticks i evidenspopulationen
+kap                  se ovan
+filter               {regim, n_forsok_in, n_forsok_behallna,
+                      n_forsok_exkluderade, n_forsok_fore_kap}
+handelser            [Handelse, ...]          # evidenspopulationen
+kluster              [Kluster & {population}]
+atgarder             [Kluster & {prio, population}]
+populationer         { etikett: Population, ... }   # alltid tre
 ```
 
-`navmesh_stamp` är `"unknown"` om ingen rad (behållen eller exkluderad)
-bar fältet; annars **ett** värde om alla stämplade rader är lika, annars
+`n_forsok_in` = giltiga efter kap (alla_giltiga). `n_forsok_behallna` =
+evidenspopulationen. `n_forsok_exkluderade` = giltiga efter kap som
+inte är evidens (teleport under kedjad-default). `n_forsok_fore_kap` =
+giltiga före cykelkapning.
+
+`navmesh_stamp` är `"unknown"` om ingen rad i någon population bar
+fältet; annars **ett** värde om alla stämplade rader är lika, annars
 `{"status":"mixed"}`.
 
 ## Handelse
@@ -174,9 +215,9 @@ regim, drop_u, stall_reason, meta_utfall`
 
 ## Kluster / åtgärd
 
-`kluster_id, cell, lank, klass, bind, arm, ben, locus, centroid, spridning_u,
-n_handelser, n_forsok, forsok_id, handelse_id, atgard_kandidat`
-plus `prio` på åtgärdsraden.
+`kluster_id, cell, lank, klass, bind, arm, ben, population, locus,
+centroid, spridning_u, n_handelser, n_forsok, forsok_id, handelse_id,
+atgard_kandidat` plus `prio` på åtgärdsraden.
 
 `locus` = centroid avrundad till 2 decimaler (samma tal som `centroid`).
 
