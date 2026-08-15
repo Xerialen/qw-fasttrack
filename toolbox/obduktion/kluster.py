@@ -15,8 +15,13 @@ def _centroid(origins: list[list[float]]) -> list[float]:
     return [sum(o[i] for o in origins) / n for i in range(3)]
 
 
+def _has_origin(ev: dict) -> bool:
+    o = ev.get("origin")
+    return bool(o) and len(o) >= 3
+
+
 def _handelse_sort_key(ev: dict):
-    o = ev.get("origin") or [0, 0, 0]
+    o = ev.get("origin") if _has_origin(ev) else (1e9, 1e9, 1e9)
     t = ev.get("t")
     tkey = t if t is not None else -1e99
     return (ev.get("forsok_id") or "", tkey, ev.get("klass") or "",
@@ -72,8 +77,10 @@ def klustra(handelser: list[dict]) -> list[dict]:
 
     raw: list[list[dict]] = [stamped[k] for k in sorted(stamped)]
     for key in sorted(unknown):
-        evs = sorted(unknown[key], key=lambda e: e["id"])
-        raw.extend(_spatial_split(evs))
+        evs = sorted((e for e in unknown[key] if _has_origin(e)),
+                     key=lambda e: e["id"])
+        if evs:
+            raw.extend(_spatial_split(evs))
     return [_kluster_from(members) for members in raw]
 
 
@@ -84,7 +91,18 @@ def _uniq_or_mixed(values: set[str]) -> str:
 
 
 def _kluster_from(members: list[dict]) -> dict:
-    origins = [m["origin"] for m in members]
+    origins = [m["origin"] for m in members if _has_origin(m)]
+    if not origins:
+        return {
+            "cell": "unknown", "lank": "unknown", "klass": members[0]["klass"],
+            "bind": "unknown", "arm": "mixed", "ben": "mixed",
+            "locus": [0.0, 0.0, 0.0], "centroid": [0.0, 0.0, 0.0],
+            "spridning_u": 0.0, "n_handelser": len(members),
+            "n_forsok": len({m["forsok_id"] for m in members}),
+            "forsok_id": sorted({m["forsok_id"] for m in members}),
+            "handelse_id": sorted(m["id"] for m in members),
+            "atgard_kandidat": False,
+        }
     c = _centroid(origins)
     sprid = max(_dist(o, c) for o in origins) if origins else 0.0
     cells = {m["cell"] for m in members}

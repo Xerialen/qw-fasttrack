@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT))
 
 from toolbox.obduktion.adapter import extract_stamp  # noqa: E402
 from toolbox.obduktion.dump import dumps  # noqa: E402
+from toolbox.obduktion.klassa import peak_drop_events, stall_events  # noqa: E402
 from toolbox.obduktion.pipeline import obducera  # noqa: E402
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "mini_serie"
@@ -48,7 +49,7 @@ class TestMiniSerie(unittest.TestCase):
         cls.text = dumps(cls.doc)
 
     def test_schema(self):
-        self.assertEqual(self.doc["schema"], "verktygslada/obducera/2")
+        self.assertEqual(self.doc["schema"], "verktygslada/obducera/3")
         self.assertEqual(self.doc["kommando"], "obducera")
         self.assertEqual(self.doc["serie"], "mini_serie")
         self.assertEqual(self.doc["regim"], "kedjad")
@@ -175,6 +176,47 @@ class TestMiniSerie(unittest.TestCase):
             self.assertEqual(h["origin"], [round(x, 2) for x in h["origin"]])
             if h["t"] is not None:
                 self.assertEqual(h["t"], round(h["t"], 3))
+
+
+class TestLandingOchPeakReset(unittest.TestCase):
+    def _tk(self, t, origin, on_ground, cell="unknown"):
+        return {"t": t, "origin": origin, "on_ground": on_ground,
+                "cell": cell, "lank": "unknown",
+                "bind": "stamped" if cell != "unknown" else "unknown"}
+
+    def test_fall_binds_till_landning_inte_luft(self):
+        ticks = [
+            self._tk(0.0, [256.0, -672.0, 328.0], True, "1373"),
+            self._tk(0.2, [256.0, -652.0, 328.0], True, "1375"),
+            self._tk(0.4, [256.0, -640.0, 178.0], False, "unknown"),
+            self._tk(1.5, [256.0, -608.0, -16.0], True, "1376"),
+        ]
+        evs = peak_drop_events(ticks, undanta_ut=False)
+        self.assertEqual(len(evs), 1)
+        self.assertEqual(evs[0]["klass"], "fall")
+        self.assertEqual(evs[0]["cell"], "1376")
+        self.assertEqual(evs[0]["origin"][2], -16.0)
+
+    def test_ut_aterstaller_aldrig_peak(self):
+        # 328→178→-16: en kontinuerlig nedgång; harness 0 fall, en avsett_drop
+        ticks = [
+            self._tk(0.0, [0.0, 0.0, 328.0], True),
+            self._tk(0.2, [0.0, 0.0, 178.0], False),
+            self._tk(0.4, [0.0, 0.0, -16.0], True),
+        ]
+        evs = peak_drop_events(ticks, undanta_ut=True)
+        self.assertEqual(len(evs), 1)
+        self.assertEqual(evs[0]["klass"], "avsett_drop")
+
+    def test_stall_utan_origin_emitteras_inte(self):
+        ticks = [{
+            "t": 1.0, "origin": None, "on_ground": True,
+            "cell": "unknown", "lank": "unknown", "bind": "unknown",
+            "stall_event": {"ev": "bot_stall", "reason": "displacement",
+                            "t": 1.0},
+            "row": {},
+        }]
+        self.assertEqual(stall_events(ticks), [])
 
 
 class TestStallOchTimeout(unittest.TestCase):
