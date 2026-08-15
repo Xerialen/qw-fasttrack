@@ -48,26 +48,19 @@ def graph_stamp(map_name: str, cells: int, links: int, rj_links: int) -> int:
     return fnv1a64(map_name.encode("utf-8") + struct.pack("<III", cells, links, rj_links))
 
 
-def _fmt(value) -> str:
-    """Kanonisk koordinat-/talform: heltal utan decimal, annars %.2f (runda-halv-jämn)."""
-    v = float(value)
-    if v == int(v):
-        return str(int(v))
-    return format(round(v, 2), ".2f")
-
-
 def canonical_inventory(doc: dict) -> bytes:
     """Nivå 2: kanonisk inventering — byte-stabil, oberoende av link-id.
 
-    Celler sorterade på id med origin; ALLA riktade länkar (inkl. rensade ur
-    adjacensen) sorterade på (source, target, kind, traversable), var och en
-    med traverserbarhetsflagga T (1 = i adjacensen, 0 = rensad). Raketjump-
-    länkar är L-poster med kind=rocketjump (ingen separat R-sektion).
+    Celler sorterade på id med origin (int()-trunkering mot noll, mkgraph-
+    beteende); ALLA riktade länkar (inkl. rensade ur adjacensen) sorterade på
+    (source, target, kind, traversable), var och en med traverserbarhetsflagga
+    T (1 = i adjacensen, 0 = rensad). Raketjump-länkar är L-poster med
+    kind=rocketjump (ingen separat R-sektion).
     Separator: tab mellan fält, LF mellan poster, ingen avslutande LF.
     """
     lines = []
     for cid, c in sorted(zip(doc["cell_ids"], doc["cells"])):
-        lines.append(f"C\t{cid}\t{_fmt(c[0])}\t{_fmt(c[1])}\t{_fmt(c[2])}")
+        lines.append(f"C\t{cid}\t{int(c[0])}\t{int(c[1])}\t{int(c[2])}")
     lrecs = []
     for l in doc["links"]:
         t = 1 if l.get("traversable", True) else 0
