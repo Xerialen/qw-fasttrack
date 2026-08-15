@@ -10,6 +10,7 @@ from pathlib import Path
 
 from toolbox.obduktion.adapter import (extract_stamp, iter_ticks, load_ticks,
                                        resolve_graph_stamp, stamp_id_str)
+from toolbox.obduktion.pipeline import obducera
 
 STAMP = "13090435456435551592"
 OTHER = "9999999999999999999"
@@ -274,6 +275,94 @@ class ResolveGraphStampPerArm(unittest.TestCase):
             self.assertEqual(got["referens"], self.STAMP_A)
             self.assertEqual(got["kalla"], "manifest")
             self.assertTrue(all(f["_arm_stamp"] == self.STAMP_A for f in forsok))
+
+
+class IntraArmConflictFailClosed(unittest.TestCase):
+    """Intra-arm-konflikt är FAIL-CLOSED: cell nollställs, inte fail-open."""
+
+    def test_conflict_nulls_cell(self):
+        row = {"t": 1.0, "cell": 530, "graph_stamp": "111",
+               "players": [{"ent": 1, "origin": [0, 0, 0], "on_ground": True}]}
+        s = extract_stamp(row, None, None, conflict=True)
+        self.assertEqual(s["cell"], "unknown")
+        self.assertEqual(s["lank"], "unknown")
+        self.assertEqual(s["bind"], "unknown")
+        # konflikt är inte en "avvik" — det fanns ingen referens att avvika från
+        self.assertFalse(s["stamp_avvik"])
+
+    def test_no_conflict_keeps_cell(self):
+        row = {"t": 1.0, "cell": 530, "graph_stamp": "111",
+               "players": [{"ent": 1, "origin": [0, 0, 0], "on_ground": True}]}
+        s = extract_stamp(row, None, None, conflict=False)
+        self.assertEqual(s["cell"], "530")
+
+
+class StampKontrollPerArm(unittest.TestCase):
+    """stamp_kontroll-utdatat bär per_arm + ovaliderad (grok2 justering 1)."""
+    STAMP_A = "13090435456435551592"
+    STAMP_B = "906595427771298736"
+
+    def _skriv(self, serie, stamplar, arm, stamp, cell=530):
+        (serie / arm / "c001").mkdir(parents=True)
+        (stamplar / arm / "c001").mkdir(parents=True)
+        raw = [{"t": 1.0, "players": [{"ent": 1, "origin": [0, 0, 0],
+                                       "on_ground": True}]}]
+        (serie / arm / "c001" / "in_ring.jsonl").write_text(
+            json.dumps(raw[0]) + "\n", encoding="utf-8")
+        (stamplar / arm / "c001" / "in_ring.jsonl").write_text(
+            json.dumps({"t": 1.0, "bot": 1, "cell": cell, "verdict": "covered",
+                        "schema": "qw-nav-graph/1", "graph_stamp": stamp}) + "\n",
+            encoding="utf-8")
+
+    def test_per_arm_karta(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            serie = Path(tmp) / "serie"
+            stamplar = Path(tmp) / "stampad"
+            self._skriv(serie, stamplar, "A", self.STAMP_A)
+            self._skriv(serie, stamplar, "B", self.STAMP_B)
+            (serie / "manifest.json").write_text(json.dumps({
+                "per_arm": {
+                    "A": {"graph_stamp": self.STAMP_A, "schema": "qw-nav-graph/1"},
+                    "B": {"graph_stamp": self.STAMP_B, "schema": "qw-nav-graph/1"}}}),
+                encoding="utf-8")
+            doc = obducera(serie, arm="AB", regim="alla", stamplar=stamplar)
+            sk = doc["stamp_kontroll"]
+            self.assertEqual(sk["kalla"], "manifest")
+            self.assertEqual(sk["per_arm"]["A"]["referens"], self.STAMP_A)
+            self.assertEqual(sk["per_arm"]["B"]["referens"], self.STAMP_B)
+            self.assertEqual(sk["per_arm"]["A"]["ok"], 1)
+            self.assertEqual(sk["per_arm"]["B"]["ok"], 1)
+            self.assertEqual(sk["per_arm"]["A"]["avvikande"], 0)
+            self.assertEqual(sk["ovaliderad"], 0)
+
+    def test_intra_arm_conflict_ovaliderad_fail_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            serie = Path(tmp) / "serie"
+            stamplar = Path(tmp) / "stampad"
+            # arm A: tvâ rader med OLIKA stamps (äkta konflikt)
+            (serie / "A" / "c001").mkdir(parents=True)
+            (stamplar / "A" / "c001").mkdir(parents=True)
+            raw = [{"t": 1.0, "players": [{"ent": 1, "origin": [0, 0, 0],
+                                           "on_ground": True}]},
+                   {"t": 2.0, "players": [{"ent": 1, "origin": [0, 0, 0],
+                                           "on_ground": True}]}]
+            (serie / "A" / "c001" / "in_ring.jsonl").write_text(
+                "".join(json.dumps(r) + "\n" for r in raw), encoding="utf-8")
+            (stamplar / "A" / "c001" / "in_ring.jsonl").write_text(
+                json.dumps({"t": 1.0, "bot": 1, "cell": 530, "verdict": "covered",
+                            "schema": "qw-nav-graph/1",
+                            "graph_stamp": self.STAMP_A}) + "\n" +
+                json.dumps({"t": 2.0, "bot": 1, "cell": 540, "verdict": "covered",
+                            "schema": "qw-nav-graph/1",
+                            "graph_stamp": self.STAMP_B}) + "\n",
+                encoding="utf-8")
+            doc = obducera(serie, arm="A", regim="alla", stamplar=stamplar)
+            sk = doc["stamp_kontroll"]
+            self.assertEqual(sk["kalla"], "konflikt")
+            self.assertEqual(sk["per_arm"]["A"]["ovaliderad"], 2)
+            self.assertEqual(sk["per_arm"]["A"]["ok"], 0)
+            # FAIL-CLOSED: cell nollställd, inga stamplade ticks
+            self.assertEqual(doc["bind_statistik"]["stamplade"], 0)
 
 
 if __name__ == "__main__":

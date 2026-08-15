@@ -294,28 +294,37 @@ bump; ett fält som *ändrar betydelse* kräver bump.
 ### Nya rotfält
 
 ```
-graph_stamp     sträng   # nivå 1, decimalsträng, eller "unknown"
-stamp_kontroll  objekt   # {kalla, referens, ok, avvikande, ostamplade}
+graph_stamp     sträng   # nivå 1, decimalsträng, eller "unknown" (armar skiljer sig)
+stamp_kontroll  objekt   # {kalla, referens, per_arm, ok, avvikande, ostamplade, ovaliderad}
 ```
 
 `stamp_kontroll.kalla` är `manifest` | `rader` | `konflikt` | `ingen`.
+`stamp_kontroll.per_arm` är `{arm: {referens, ok, avvikande, ostamplade, ovaliderad}}`.
 
-### Grafvalidering per rad (bindande)
+### Grafvalidering per rad (bindande, PER ARM)
 
-Serien har **en** referensgraf, upplöst en gång innan raderna läses:
+Serien har **två referensgrafer** — en per arm (A och B bär olika stamp efter
+per-arm-omstämplingen). Varje försök valideras mot **sin arms** referens:
 
-1. `manifest.json` i `--stamplar` (eller i serien) — A:s egen deklaration.
-2. Annars radernas `graph_stamp`, men bara om de är **eniga**.
-3. Är de oeniga finns ingen referens (`kalla: konflikt`). Att välja majoriteten
-   vore en gissning, och en tyst sådan.
+1. `manifest.json` i `--stamplar` (eller i serien) — A:s `per_arm`-deklaration
+   (`per_arm.A.graph_stamp`, `per_arm.B.graph_stamp`). Äldre manifest med en
+   enda top-level `graph_stamp` gäller som wildcard för båda armarna.
+2. Annars radernas `graph_stamp` **per arm**, men bara om armens rader är eniga.
+3. **Intra-arm-konflikt** (två olika stamp inom samma arm) ⇒ den armen har
+   ingen referens (`per_arm[arm].referens = "unknown"`). Två armar med olika
+   stamp är **inte** en konflikt — det är designen.
 
-Varje tick valideras mot referensen. En rad som bär en **annan** graf får
-`cell` och `lank` nollställda till `"unknown"` och räknas som `avvikande`.
-Bindningen återskapas aldrig: ett cell-id är bara ett namn på en cell *inom en
-graf*, så att behålla den vore att peka ut fel plats med full säkerhet.
+Varje tick valideras mot **sin arms** referens. En rad som bär en **annan** graf
+än sin arm får `cell` och `lank` nollställda till `"unknown"` och räknas som
+`avvikande`. **Intra-arm-konflikt är FAIL-CLOSED**: den armens celler nollställs
+till `"unknown"` (ingen av de blandade stampen betros) och räknas som
+`ovaliderad` — inte `ok`, inte `avvikande`. Bindningen återskapas aldrig: ett
+cell-id är bara ett namn på en cell *inom en graf*.
 
-`ostamplade` (rad utan `graph_stamp`) är **inte** en avvikelse — frånvaro av
-facit är inte ett facit. De tre räknarna hålls isär just därför.
+`ok` = validerad mot armens referens och matchade. `avvikande` = validerad och
+avvek. `ovaliderad` = rad bar en stamp men armen saknade referens
+(intra-arm-konflikt). `ostamplade` = rad utan `graph_stamp` (inte en avvikelse).
+De fyra räknarna hålls isär just därför.
 
 ### A:s stämpelformat
 

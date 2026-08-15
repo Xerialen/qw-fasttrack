@@ -20,18 +20,23 @@ POP_PREFIX = {
 
 
 def _process_forsok(forsok: list[dict]) -> tuple[list[dict], list[Any], list[Any],
-                                                 dict, dict]:
+                                                 dict, dict, dict]:
     raw_events: list[dict] = []
     stamps: list[Any] = []
     contracts: list[Any] = []
     n_stamped = n_unknown = 0
-    # Grafkontrollen per tick: höll raden samma graf som serien, bar den ingen
-    # stämpel alls, eller pekade den på en annan graf? Den tredje gruppen är
-    # bunden till "unknown" av adaptern — den räknas här så att den inte
-    # försvinner tyst in i unknown-högen tillsammans med "ostämplad", som är
-    # något helt annat.
-    n_stamp_ok = n_stamp_avvik = n_ostamplad = 0
+    # Grafkontrollen per tick, PER ARM: ok = validerad mot armens referens;
+    # avvikande = validerad och avvek; ovaliderad = rad bar en stamp men armen
+    # saknade referens (intra-arm-konflikt) så inget validerades (fail-closed i
+    # adaptern); ostamplad = ingen stamp alls.
+    per_arm: dict[str, dict] = {}
     for f in forsok:
+        arm = f.get("arm") or "?"
+        ref = f.get("_arm_stamp", f.get("ref_stamp"))
+        st = per_arm.setdefault(arm, {
+            "referens": ref if ref is not None else "unknown",
+            "ok": 0, "avvikande": 0, "ostamplade": 0, "ovaliderad": 0,
+        })
         ticks = load_ticks(f)
         for tk in ticks:
             if tk.get("bind") == "stamped":
@@ -39,19 +44,28 @@ def _process_forsok(forsok: list[dict]) -> tuple[list[dict], list[Any], list[Any
             else:
                 n_unknown += 1
             if tk.get("stamp_avvik"):
-                n_stamp_avvik += 1
+                st["avvikande"] += 1
             elif tk.get("graph_stamp"):
-                n_stamp_ok += 1
+                if ref is not None:
+                    st["ok"] += 1
+                else:
+                    st["ovaliderad"] += 1
             else:
-                n_ostamplad += 1
+                st["ostamplade"] += 1
             if tk.get("navmesh_stamp") is not None:
                 stamps.append(tk["navmesh_stamp"])
             if tk.get("graph_contract") is not None:
                 contracts.append(tk["graph_contract"])
         raw_events.extend(klassa_forsok(f, ticks))
+    sk = {"ok": 0, "avvikande": 0, "ostamplade": 0, "ovaliderad": 0}
+    for st in per_arm.values():
+        sk["ok"] += st["ok"]
+        sk["avvikande"] += st["avvikande"]
+        sk["ostamplade"] += st["ostamplade"]
+        sk["ovaliderad"] += st["ovaliderad"]
     return (raw_events, stamps, contracts,
             {"stamplade": n_stamped, "unknown": n_unknown},
-            {"ok": n_stamp_ok, "avvikande": n_stamp_avvik, "ostamplade": n_ostamplad})
+            sk, per_arm)
 
 
 def _stamp_population(handelser: list[dict], kluster: list[dict],
@@ -148,16 +162,18 @@ def obducera(serie: str | Path, *,
     pop_cache: dict[str, dict] = {}
     all_stamps: list[Any] = []
     all_contracts: list[Any] = []
-    stamp_kontroll = {"ok": 0, "avvikande": 0, "ostamplade": 0}
+    stamp_kontroll = {"ok": 0, "avvikande": 0, "ostamplade": 0, "ovaliderad": 0}
+    stamp_per_arm: dict[str, dict] = {}
     for kind in POP_KINDS:
         members = _pop_members(giltiga, kind)
-        raw, stamps, contracts, bind, sk = _process_forsok(members)
+        raw, stamps, contracts, bind, sk, per_arm = _process_forsok(members)
         all_stamps.extend(stamps)
         all_contracts.extend(contracts)
         if kind == "alla_giltiga":
             # Räknat på alla giltiga försök: grafkontrollen är en egenskap hos
             # datat, inte hos evidensfiltret, och ska inte ändras av --regim.
             stamp_kontroll = sk
+            stamp_per_arm = per_arm
         obj, atg = _population_obj(
             kind, n_kap, members, raw, bind,
             with_atgarder=(kind == ev_kind),
@@ -189,6 +205,7 @@ def obducera(serie: str | Path, *,
         "stamp_kontroll": {
             "kalla": graf["kalla"],
             "referens": graf["referens"],
+            "per_arm": stamp_per_arm,
             **stamp_kontroll,
         },
         "navmesh_stamp": merge_navmesh(all_stamps),

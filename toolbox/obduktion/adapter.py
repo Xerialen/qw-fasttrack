@@ -45,7 +45,7 @@ def stamp_id_str(value) -> str | None:
 
 
 def extract_stamp(row: dict, player: dict | None = None,
-                  ref_stamp: str | None = None) -> dict:
+                  ref_stamp: str | None = None, conflict: bool = False) -> dict:
     """Plocka stämpel från rad och ev. player-objekt. Gissar aldrig xyz.
 
     När `ref_stamp` är satt valideras radens `graph_stamp` mot den. En rad som
@@ -96,7 +96,9 @@ def extract_stamp(row: dict, player: dict | None = None,
             verdict = src["verdict"]
 
     avvik = bool(ref_stamp and graph_stamp and graph_stamp != ref_stamp)
-    if avvik:
+    if avvik or conflict:
+        # FAIL-CLOSED vid intra-arm-konflikt: blandade stamps => ingen av dem
+        # betrodd; cell nollställs hellre än att binda mot fel graf.
         cell = "unknown"
         lank = "unknown"
     bind = "stamped" if cell != "unknown" else "unknown"
@@ -163,7 +165,8 @@ def _align_stamp(sidecars: list[dict] | None, idx: int, t: float | None) -> dict
 
 def iter_ticks(jsonl: Path, ent: int, stamplar: Path | None = None,
                serie: Path | None = None,
-               ref_stamp: str | None = None) -> Iterator[dict]:
+               ref_stamp: str | None = None,
+               conflict: bool = False) -> Iterator[dict]:
     sidecars = _load_stamp_sidecar(jsonl, stamplar, serie)
     with jsonl.open(encoding="utf-8") as fh:
         for i, line in enumerate(fh):
@@ -181,11 +184,12 @@ def iter_ticks(jsonl: Path, ent: int, stamplar: Path | None = None,
                     if k not in merged or merged[k] is None:
                         merged[k] = v
                 row = merged
-            yield from _ticks_from_row(row, ent, i, ref_stamp)
+            yield from _ticks_from_row(row, ent, i, ref_stamp, conflict)
 
 
 def _ticks_from_row(row: dict, ent: int, idx: int,
-                    ref_stamp: str | None = None) -> Iterator[dict]:
+                    ref_stamp: str | None = None,
+                    conflict: bool = False) -> Iterator[dict]:
     t = row.get("t")
     players = row.get("players") or []
     picked = None
@@ -196,7 +200,7 @@ def _ticks_from_row(row: dict, ent: int, idx: int,
     if picked is None and len(players) == 1:
         picked = players[0]
     if picked is not None and picked.get("origin") is not None:
-        stamp = extract_stamp(row, picked, ref_stamp)
+        stamp = extract_stamp(row, picked, ref_stamp, conflict)
         yield {
             "t": t,
             "origin": list(picked["origin"]),
@@ -211,8 +215,8 @@ def _ticks_from_row(row: dict, ent: int, idx: int,
     if row.get("ev") == "bot_stall" or isinstance(row.get("stall"), dict):
         ev = row["stall"] if isinstance(row.get("stall"), dict) else row
         origin = ev.get("origin") or ev.get("pos")
-        stamp = extract_stamp(ev, None, ref_stamp)
-        stamp2 = extract_stamp(row, None, ref_stamp)
+        stamp = extract_stamp(ev, None, ref_stamp, conflict)
+        stamp2 = extract_stamp(row, None, ref_stamp, conflict)
         if stamp["cell"] == "unknown":
             stamp["cell"] = stamp2["cell"]
         if stamp["lank"] == "unknown":
@@ -375,8 +379,10 @@ def _undanta_ut(ben: str, meta: dict) -> bool:
 
 def load_ticks(forsok: dict) -> list[dict]:
     ref = forsok.get("_arm_stamp", forsok.get("ref_stamp"))
+    conflict = bool(forsok.get("_arm_conflict", False))
     return list(iter_ticks(forsok["jsonl"], forsok["ent"],
-                           forsok.get("stamplar"), forsok.get("serie"), ref))
+                           forsok.get("stamplar"), forsok.get("serie"),
+                           ref, conflict))
 
 
 def load_attr(forsok: dict) -> dict:
@@ -535,6 +541,7 @@ def resolve_graph_stamp(forsok: list[dict], stamplar: Path | None,
     konflikt; det är per-arm-designen.
     """
     mani = _manifest_stamps(stamplar, serie)
+    konflikt_armar: set[str] = set()
     if mani is not None:
         referenser = dict(mani)
         kalla = "manifest"
@@ -564,6 +571,7 @@ def resolve_graph_stamp(forsok: list[dict], stamplar: Path | None,
             elif len(seen) > 1:
                 referenser[arm] = ("unknown", None)
                 konflikt = True
+                konflikt_armar.add(arm)
             else:
                 referenser[arm] = ("unknown", None)
         if konflikt:
@@ -575,6 +583,8 @@ def resolve_graph_stamp(forsok: list[dict], stamplar: Path | None,
 
     for f in forsok:
         f["_arm_stamp"] = _arm_ref(f, referenser)
+        # FAIL-CLOSED: intra-arm-konflikt => cell nollställs av adaptern.
+        f["_arm_conflict"] = (f.get("arm") or "?") in konflikt_armar
 
     vals = [v[0] for v in referenser.values()]
     if vals and all(v == vals[0] and v != "unknown" for v in vals):
