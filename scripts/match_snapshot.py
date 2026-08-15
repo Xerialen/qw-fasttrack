@@ -50,6 +50,8 @@ if args.run is None:
     open(RUNSEQ, "w").write(str(args.run))
 
 c = core.Control("127.0.0.1", 27980, timeout=20)
+c.request("set rtx_telemetry 1")
+last_telemetry_assert = time.time()
 
 
 def find_item(items, pos):
@@ -124,6 +126,16 @@ while time.time() - t0 < args.secs:
                     if p["avail_since"] is not None:
                         p["takes"].append(round(loop_t - p["avail_since"], 1))
                         p["avail_since"] = None
+        except Exception:
+            pass
+
+    # Live-bryggan stänger av rtx_telemetry när dess sista viewer kopplar ner
+    # (live_bridge.py) — håll den på under hela fångsten, annars tystnar
+    # bot_stall mitt i matchen och nollan ser ut som ett resultat.
+    if loop_t - last_telemetry_assert >= 10.0:
+        last_telemetry_assert = loop_t
+        try:
+            c.request("set rtx_telemetry 1", timeout=4)
         except Exception:
             pass
 
