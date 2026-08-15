@@ -1,17 +1,81 @@
-"""Händelseklassning. peak_drop_150 återanvänds i samma semantik som harnessen."""
+"""Händelseklassning. peak_drop_150-paritet med timtest_ben.py:98–107."""
 from __future__ import annotations
 
-from .dump import q, q_xyz
+from .dump import cell_str, lank_str, q, q_xyz
 
 PEAK_DROP = 150.0
 
 
+def _first_grounded_after(ticks: list[dict], start_i: int) -> dict | None:
+    for tk in ticks[start_i + 1:]:
+        if tk.get("on_ground") is True and tk.get("origin"):
+            return tk
+    return None
+
+
+def _last_known_before(ticks: list[dict], start_i: int) -> dict | None:
+    """Sista grounded tick före fallet; föredra en med cell ≠ unknown."""
+    found = None
+    found_stamped = None
+    for tk in ticks[:start_i]:
+        if tk.get("on_ground") is not True or not tk.get("origin"):
+            continue
+        found = tk
+        cell = tk.get("cell") or "unknown"
+        if cell != "unknown":
+            found_stamped = tk
+    return found_stamped or found
+
+
+def _bind_landing(ticks: list[dict], trigger_i: int, trigger: dict,
+                  drop_u: float, klass: str) -> dict:
+    """Landningstick om den finns; annars senaste kända cell före fallet.
+
+    .attr.json (per försök) skrivs inte över per-händelse-bindningen.
+    """
+    land = trigger if trigger.get("on_ground") is True else None
+    if land is None:
+        land = _first_grounded_after(ticks, trigger_i)
+    if land is not None:
+        o = land.get("origin") or trigger.get("origin")
+        return {
+            "klass": klass,
+            "t": land.get("t"),
+            "origin": list(o),
+            "cell": land.get("cell") or "unknown",
+            "lank": land.get("lank") or "unknown",
+            "bind": land.get("bind") or "unknown",
+            "drop_u": drop_u,
+            "stall_reason": None,
+            "tick": land,
+        }
+    prev = _last_known_before(ticks, trigger_i)
+    src = prev or trigger
+    o = src.get("origin") or trigger.get("origin")
+    return {
+        "klass": klass,
+        "t": src.get("t"),
+        "origin": list(o) if o else None,
+        "cell": src.get("cell") or "unknown",
+        "lank": src.get("lank") or "unknown",
+        "bind": src.get("bind") or "unknown",
+        "drop_u": drop_u,
+        "stall_reason": None,
+        "tick": src,
+    }
+
+
 def peak_drop_events(ticks: list[dict], undanta_ut: bool) -> list[dict]:
-    """Samma reset-regel som timtest_ben.fall_peak_drop_150, men emitterar
-    platsen där Δz slog. undanta_ut ⇒ avsett_drop i stället för fall."""
+    """peak_drop_150 med harness-paritet (timtest_ben.py:98–107).
+
+    IN (undanta_ut=False): räkna fall och återställ peak efter varje slag.
+    UT (undanta_ut=True): peak återställs ALDRIG; högst en avsett_drop
+    per försök (första korsningen). Bindning = landning, inte lufttick.
+    """
     out = []
     peak = -9e9
-    for tk in ticks:
+    emitted_avsett = False
+    for i, tk in enumerate(ticks):
         o = tk.get("origin")
         if not o or len(o) < 3:
             continue
@@ -19,23 +83,23 @@ def peak_drop_events(ticks: list[dict], undanta_ut: bool) -> list[dict]:
         if z > peak:
             peak = z
         elif peak - z > PEAK_DROP:
-            klass = "avsett_drop" if undanta_ut else "fall"
-            out.append({
-                "klass": klass,
-                "t": tk.get("t"),
-                "origin": list(o),
-                "cell": tk["cell"],
-                "lank": tk["lank"],
-                "bind": tk["bind"],
-                "drop_u": peak - z,
-                "stall_reason": None,
-                "tick": tk,
-            })
-            peak = z
+            if undanta_ut:
+                if not emitted_avsett:
+                    ev = _bind_landing(ticks, i, tk, peak - z, "avsett_drop")
+                    if ev.get("origin"):
+                        out.append(ev)
+                    emitted_avsett = True
+                # peak orörd — samma som harnessens elif som aldrig tas
+            else:
+                ev = _bind_landing(ticks, i, tk, peak - z, "fall")
+                if ev.get("origin"):
+                    out.append(ev)
+                peak = z
     return out
 
 
 def stall_events(ticks: list[dict]) -> list[dict]:
+    """Stall utan origin emitteras inte (ingen klusterplats vid världsorigo)."""
     out = []
     for tk in ticks:
         ev = tk.get("stall_event")
@@ -47,11 +111,13 @@ def stall_events(ticks: list[dict]) -> list[dict]:
         if not ev:
             continue
         origin = tk.get("origin") or ev.get("origin") or ev.get("pos")
+        if not origin or len(origin) < 3:
+            continue
         reason = ev.get("reason")
         out.append({
             "klass": "stall",
             "t": ev.get("t", tk.get("t")),
-            "origin": list(origin) if origin else [0.0, 0.0, 0.0],
+            "origin": list(origin),
             "cell": cell_from_ev(ev, tk),
             "lank": lank_from_ev(ev, tk),
             "bind": "stamped" if cell_from_ev(ev, tk) != "unknown" else "unknown",
@@ -63,14 +129,12 @@ def stall_events(ticks: list[dict]) -> list[dict]:
 
 
 def cell_from_ev(ev: dict, tk: dict) -> str:
-    from .dump import cell_str
     if ev.get("cell") is not None:
         return cell_str(ev.get("cell"))
     return tk.get("cell") or "unknown"
 
 
 def lank_from_ev(ev: dict, tk: dict) -> str:
-    from .dump import lank_str
     if ev.get("link") is not None:
         return lank_str(ev.get("link"))
     if ev.get("lank") is not None:
@@ -79,22 +143,22 @@ def lank_from_ev(ev: dict, tk: dict) -> str:
 
 
 def endpoint_event(ticks: list[dict], klass: str) -> dict | None:
-    """fastnad/timeout vid sista tick — gissar inte om det saknas ticks."""
-    if not ticks:
-        return None
-    tk = ticks[-1]
-    o = tk.get("origin") or [0.0, 0.0, 0.0]
-    return {
-        "klass": klass,
-        "t": tk.get("t"),
-        "origin": list(o),
-        "cell": tk.get("cell") or "unknown",
-        "lank": tk.get("lank") or "unknown",
-        "bind": tk.get("bind") or "unknown",
-        "drop_u": None,
-        "stall_reason": None,
-        "tick": tk,
-    }
+    """fastnad/timeout vid sista tick med origin — ingen origo-placeholder."""
+    for tk in reversed(ticks):
+        o = tk.get("origin")
+        if o and len(o) >= 3:
+            return {
+                "klass": klass,
+                "t": tk.get("t"),
+                "origin": list(o),
+                "cell": tk.get("cell") or "unknown",
+                "lank": tk.get("lank") or "unknown",
+                "bind": tk.get("bind") or "unknown",
+                "drop_u": None,
+                "stall_reason": None,
+                "tick": tk,
+            }
+    return None
 
 
 def klassa_forsok(forsok: dict, ticks: list[dict]) -> list[dict]:
@@ -110,9 +174,10 @@ def klassa_forsok(forsok: dict, ticks: list[dict]) -> list[dict]:
         ev = endpoint_event(ticks, "fastnad")
         if ev:
             events.append(ev)
-    # K-serien: utfall timeout redan hanterad; "ok" med falls ger bara peak_drop
     out = []
     for ev in events:
+        if not ev.get("origin"):
+            continue
         out.append({
             "forsok_id": forsok["forsok_id"],
             "arm": forsok["arm"],
