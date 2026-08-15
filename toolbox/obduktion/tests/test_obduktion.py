@@ -208,6 +208,18 @@ class TestLandingOchPeakReset(unittest.TestCase):
         self.assertEqual(len(evs), 1)
         self.assertEqual(evs[0]["klass"], "avsett_drop")
 
+    def test_aldrig_landande_faller_tillbaka_pa_senaste_cell(self):
+        ticks = [
+            self._tk(0.0, [256.0, -672.0, 328.0], True, "1373"),
+            self._tk(0.2, [256.0, -652.0, 328.0], True, "1375"),
+            self._tk(0.4, [256.0, -640.0, 178.0], False, "unknown"),
+            self._tk(0.8, [256.0, -630.0, 50.0], False, "unknown"),
+        ]
+        evs = peak_drop_events(ticks, undanta_ut=False)
+        self.assertEqual(len(evs), 1)
+        self.assertEqual(evs[0]["cell"], "1375")
+        self.assertEqual(evs[0]["origin"][2], 328.0)
+
     def test_stall_utan_origin_emitteras_inte(self):
         ticks = [{
             "t": 1.0, "origin": None, "on_ground": True,

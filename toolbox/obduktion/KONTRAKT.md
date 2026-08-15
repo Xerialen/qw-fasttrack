@@ -45,13 +45,23 @@ eller stall-kuvert). Spår A:s stämplade rader
 (`{t, bot, cell, verdict, schema, graph_stamp}` — ingen `origin`/`players`)
 är **sidovagn**, aldrig primär input. De läses via `--stamplar` eller
 `*.stamp.jsonl` (radindex eller `t` avrundat till 3 decimaler) och
-fogas på mät-tickar. Per-försöks-`.attr.json` (`attribution.cell_id` /
-`drop_landing_cell`) är likaså sidovagn, konsumerad när landningstickens
-cell saknas.
+fogas på mät-tickar.
 
-**Fall och avsett_drop binds till LANDNINGEN**, inte luft-triggerticken:
-första tick med `on_ground=true` efter Δz-slaget, annars
-`.attr.json`-landningscellen om den finns. xyz → cell-id gissas aldrig.
+**Fall och avsett_drop binds per HÄNDELSE till LANDNINGEN**, inte
+luft-triggerticken: första tick med `on_ground=true` efter Δz-slaget.
+xyz → cell-id gissas aldrig.
+
+**Aldrig-landande fall** (spåret slutar airborne; 2/86 i T1h-A): det
+finns ingen landningstick. Då binds händelsen till **senaste kända
+cell före fallet** (sista grounded tick med cell ≠ unknown före
+Δz-slaget). Det är en **fallback**, inte en landningscell — `bind` kan
+vara `stamped` men fältet betyder inte «här landade den».
+
+**`.attr.json` är inte per-händelse.** Spår A:s `attribution.cell_id` /
+`drop_landing_cell` är **en sammanfattning per FÖRSÖK**. Obducera
+binder **per händelse**. Olika landningar i samma försök kan därför få
+olika celler; det är inte en konflikt mot försökssammanfattningen, och
+`.attr.json` får inte skriva över enskilda händelsers landningscell.
 
 Stämpelfält läses om de **finns på landningsticken** (eller sidovagn):
 
