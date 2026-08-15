@@ -1,4 +1,4 @@
-"""Klustring per (cell, länk, klass); rumslig split när cell är unknown."""
+"""Klustring per (cell, länk, klass); unknown bär även (arm, ben)."""
 from __future__ import annotations
 
 import math
@@ -23,45 +23,30 @@ def _handelse_sort_key(ev: dict):
             o[0], o[1], o[2])
 
 
-def tilldela_handelse_id(events: list[dict]) -> list[dict]:
+def tilldela_handelse_id(events: list[dict], prefix: str = "H") -> list[dict]:
     ordered = sorted(events, key=_handelse_sort_key)
     out = []
     for i, ev in enumerate(ordered, 1):
         row = dict(ev)
         row["_sort"] = i
+        row["_id_prefix"] = prefix
         out.append(row)
     return out
 
 
-def klustra(handelser: list[dict]) -> list[dict]:
-    """handelser ska redan ha kanoniska fält (id, origin avrundad)."""
-    stamped: dict[tuple, list[dict]] = {}
-    unknown: list[dict] = []
-    for ev in handelser:
-        if ev["cell"] != "unknown":
-            key = (ev["cell"], ev["lank"], ev["klass"])
-            stamped.setdefault(key, []).append(ev)
-        else:
-            unknown.append(ev)
-    unknown.sort(key=lambda e: e["id"])
-
-    raw: list[list[dict]] = list(stamped.values())
-    # greedy närmaste-centroid, radie 64, samma (klass, lank)
+def _spatial_split(evs: list[dict]) -> list[list[dict]]:
+    """Greedy centroid-kluster, radie 64. evs redan samma (arm, ben, lank, klass)."""
     buckets: list[dict] = []
-    for ev in unknown:
+    for ev in evs:
         best_i = None
         best_d = None
         for i, b in enumerate(buckets):
-            if b["klass"] != ev["klass"] or b["lank"] != ev["lank"]:
-                continue
             d = _dist(ev["origin"], b["centroid"])
             if d <= LOCUS_RADIE and (best_d is None or d < best_d
                                      or (d == best_d and i < (best_i or 0))):
                 best_i, best_d = i, d
         if best_i is None:
             buckets.append({
-                "klass": ev["klass"],
-                "lank": ev["lank"],
                 "members": [ev],
                 "centroid": list(ev["origin"]),
             })
@@ -69,9 +54,33 @@ def klustra(handelser: list[dict]) -> list[dict]:
             b = buckets[best_i]
             b["members"].append(ev)
             b["centroid"] = _centroid([m["origin"] for m in b["members"]])
+    return [b["members"] for b in buckets]
 
-    raw.extend(b["members"] for b in buckets)
+
+def klustra(handelser: list[dict]) -> list[dict]:
+    """handelser ska redan ha kanoniska fält (id, origin avrundad)."""
+    stamped: dict[tuple, list[dict]] = {}
+    unknown: dict[tuple, list[dict]] = {}
+    for ev in handelser:
+        if ev["cell"] != "unknown":
+            key = (ev["cell"], ev["lank"], ev["klass"])
+            stamped.setdefault(key, []).append(ev)
+        else:
+            key = (ev.get("arm") or "?", ev.get("ben") or "?",
+                   ev["lank"], ev["klass"])
+            unknown.setdefault(key, []).append(ev)
+
+    raw: list[list[dict]] = [stamped[k] for k in sorted(stamped)]
+    for key in sorted(unknown):
+        evs = sorted(unknown[key], key=lambda e: e["id"])
+        raw.extend(_spatial_split(evs))
     return [_kluster_from(members) for members in raw]
+
+
+def _uniq_or_mixed(values: set[str]) -> str:
+    if len(values) == 1:
+        return next(iter(values))
+    return "mixed"
 
 
 def _kluster_from(members: list[dict]) -> dict:
@@ -81,7 +90,6 @@ def _kluster_from(members: list[dict]) -> dict:
     cells = {m["cell"] for m in members}
     lanks = {m["lank"] for m in members}
     klasser = {m["klass"] for m in members}
-    # stamped-grupper är homogena; unknown-grupper också per konstruktion
     cell = members[0]["cell"] if len(cells) == 1 else "unknown"
     lank = members[0]["lank"] if len(lanks) == 1 else "unknown"
     klass = members[0]["klass"] if len(klasser) == 1 else "unknown"
@@ -96,6 +104,8 @@ def _kluster_from(members: list[dict]) -> dict:
         "lank": lank,
         "klass": klass,
         "bind": bind,
+        "arm": _uniq_or_mixed({str(m.get("arm") or "?") for m in members}),
+        "ben": _uniq_or_mixed({str(m.get("ben") or "?") for m in members}),
         "locus": centroid,
         "centroid": centroid,
         "spridning_u": q(sprid, 1),
@@ -108,19 +118,20 @@ def _kluster_from(members: list[dict]) -> dict:
 
 
 def _kluster_sort_key(k: dict):
-    # åtgärdskandidater först (samma ordning som atgarder), sen övriga
     flag = 0 if k["atgard_kandidat"] else 1
     return (flag, -k["n_forsok"], -k["n_handelser"],
-            k["klass"], k["cell"], k["lank"],
+            k["klass"], k["cell"], k["lank"], k.get("arm") or "",
+            k.get("ben") or "",
             k["centroid"][0], k["centroid"][1], k["centroid"][2])
 
 
-def numrera_och_prioritera(kluster: list[dict]) -> tuple[list[dict], list[dict]]:
+def numrera_och_prioritera(kluster: list[dict], prefix: str = "K"
+                           ) -> tuple[list[dict], list[dict]]:
     ordered = sorted(kluster, key=_kluster_sort_key)
     numbered = []
     for i, k in enumerate(ordered, 1):
         row = dict(k)
-        row["kluster_id"] = f"K{i:04d}"
+        row["kluster_id"] = f"{prefix}{i:04d}"
         numbered.append(row)
     atgarder = []
     prio = 1
@@ -132,3 +143,18 @@ def numrera_och_prioritera(kluster: list[dict]) -> tuple[list[dict], list[dict]]
         atgarder.append(row)
         prio += 1
     return numbered, atgarder
+
+
+def raknare(handelser: list[dict], kluster: list[dict], n_forsok: int) -> dict:
+    klasser = ("fall", "avsett_drop", "stall", "timeout", "fastnad")
+    counts = {f"n_{k}": 0 for k in klasser}
+    for h in handelser:
+        key = f"n_{h['klass']}"
+        if key in counts:
+            counts[key] += 1
+    return {
+        "n_forsok": n_forsok,
+        "n_handelser": len(handelser),
+        "n_kluster": len(kluster),
+        **counts,
+    }

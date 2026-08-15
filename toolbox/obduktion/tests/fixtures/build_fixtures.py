@@ -79,6 +79,17 @@ def build_mini():
                 drop_traj(7.0, [-480.0, -690.0]))
     (root / "c006" / "in_tunnel_meta.json").write_text(
         json.dumps(meta(6, "in_tunnel", "kedjad", "fall_efter_framme", 1)))
+    # c007 in_tunnel: fall NÄRA c001 in_ring — annan rutt, får inte slås ihop
+    write_jsonl(root / "c007" / "in_tunnel.jsonl",
+                drop_traj(8.0, [205.0, -695.0]))
+    (root / "c007" / "in_tunnel_meta.json").write_text(
+        json.dumps(meta(7, "in_tunnel", "kedjad", "fall_efter_framme", 1)))
+    # B-sida: samma xyz som A/c001/in_ring — annan sida, får inte slås ihop
+    broot = HERE / "mini_serie" / "B"
+    write_jsonl(broot / "c001" / "in_ring.jsonl",
+                drop_traj(9.0, [200.0, -700.0]))
+    (broot / "c001" / "in_ring_meta.json").write_text(
+        json.dumps(meta(1, "in_ring", "kedjad", "fall_efter_framme", 1)))
 
 
 def build_stall():

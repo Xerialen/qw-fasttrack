@@ -20,7 +20,9 @@ Default `--regim kedjad`.
 python3 scripts/obducera.py --serie ~/lab/t1h --regim kedjad --out atgarder.json
 ```
 
-Schema: `verktygslada/obducera/1`. Kontrakt: `toolbox/obduktion/KONTRAKT.md`.
+Schema: `verktygslada/obducera/2`. Kontrakt: `toolbox/obduktion/KONTRAKT.md`.
+Unknown-kluster bär `(arm, ben)`. Bortfiltrerade regimer redovisas i
+`exkluderade_regimer` (kastas aldrig tyst).
 Tester: `python3 -m unittest toolbox.obduktion.tests.test_obduktion`.
 
 Återanvänder peak_drop_150-semantiken (samma reset som `timtest_ben`) och

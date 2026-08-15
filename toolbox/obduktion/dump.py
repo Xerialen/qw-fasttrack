@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-SCHEMA = "verktygslada/obducera/1"
+SCHEMA = "verktygslada/obducera/2"
 LOCUS_RADIE = 64.0
 NOLINK = 4294967295
 KLASSER = ("fall", "avsett_drop", "stall", "timeout", "fastnad")

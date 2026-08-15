@@ -48,10 +48,11 @@ class TestMiniSerie(unittest.TestCase):
         cls.text = dumps(cls.doc)
 
     def test_schema(self):
-        self.assertEqual(self.doc["schema"], "verktygslada/obducera/1")
+        self.assertEqual(self.doc["schema"], "verktygslada/obducera/2")
         self.assertEqual(self.doc["kommando"], "obducera")
         self.assertEqual(self.doc["serie"], "mini_serie")
         self.assertEqual(self.doc["regim"], "kedjad")
+        self.assertIn("exkluderade_regimer", self.doc)
 
     def test_determinism_byteidentisk(self):
         again = dumps(obducera(FIXTURE, arm="AB", regim="kedjad"))
@@ -64,15 +65,19 @@ class TestMiniSerie(unittest.TestCase):
         self.assertEqual(list(parsed.keys()), sorted(parsed.keys()))
 
     def test_regim_filtrerar_teleport(self):
-        # c003 är teleport_efter_fel — får inte synas under kedjad
+        # c003 är teleport_efter_fel — inte i kedjad-listan, men i exkluderade
         ids = {h["forsok_id"] for h in self.doc["handelser"]}
         self.assertNotIn("A/c003/in_ring", ids)
         self.assertGreater(self.doc["filter"]["n_forsok_exkluderade"], 0)
+        xids = {h["forsok_id"] for h in self.doc["exkluderade_regimer"]["handelser"]}
+        self.assertIn("A/c003/in_ring", xids)
 
     def test_regim_alla_tar_med_teleport(self):
         doc = obducera(FIXTURE, regim="alla")
         ids = {h["forsok_id"] for h in doc["handelser"]}
         self.assertIn("A/c003/in_ring", ids)
+        self.assertEqual(doc["exkluderade_regimer"]["n_forsok"], 0)
+        self.assertEqual(doc["exkluderade_regimer"]["handelser"], [])
 
     def test_fall_inte_avsett_pa_in(self):
         klasser = {h["klass"] for h in self.doc["handelser"]
@@ -101,6 +106,28 @@ class TestMiniSerie(unittest.TestCase):
         cents = [k["centroid"] for k in fall]
         xs = [c[0] for c in cents]
         self.assertTrue(any(x > 0 for x in xs) and any(x < 0 for x in xs))
+
+    def test_unknown_kluster_blandar_inte_sida(self):
+        fall = [k for k in self.doc["kluster"]
+                if k["klass"] == "fall" and k["bind"] == "unknown"]
+        for k in fall:
+            self.assertIn(k["arm"], ("A", "B"))
+            self.assertNotEqual(k["arm"], "mixed")
+        a = [k for k in fall if k["arm"] == "A" and k["ben"] == "in_ring"]
+        b = [k for k in fall if k["arm"] == "B" and k["ben"] == "in_ring"]
+        self.assertTrue(a and b)
+
+    def test_unknown_kluster_blandar_inte_rutt(self):
+        fall = [k for k in self.doc["kluster"]
+                if k["klass"] == "fall" and k["bind"] == "unknown"
+                and k["arm"] == "A"]
+        bens = {k["ben"] for k in fall}
+        self.assertIn("in_ring", bens)
+        self.assertIn("in_tunnel", bens)
+        for k in fall:
+            self.assertNotEqual(k["ben"], "mixed")
+            ids_ben = {fid.split("/")[-1] for fid in k["forsok_id"]}
+            self.assertEqual(ids_ben, {k["ben"]})
 
     def test_stamplad_cell_bevaras(self):
         stamped = [h for h in self.doc["handelser"] if h["bind"] == "stamped"]
@@ -149,6 +176,9 @@ class TestStallOchTimeout(unittest.TestCase):
         kedjad = obducera(serie, regim="kedjad")
         self.assertEqual(kedjad["filter"]["n_forsok_behallna"], 0)
         self.assertEqual(kedjad["handelser"], [])
+        self.assertTrue(any(h["klass"] == "timeout"
+                            for h in kedjad["exkluderade_regimer"]["handelser"]))
+        self.assertGreater(kedjad["exkluderade_regimer"]["n_forsok"], 0)
 
 
 if __name__ == "__main__":
