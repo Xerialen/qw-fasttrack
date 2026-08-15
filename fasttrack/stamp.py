@@ -59,25 +59,22 @@ def _fmt(value) -> str:
 def canonical_inventory(doc: dict) -> bytes:
     """Nivå 2: kanonisk inventering — byte-stabil, oberoende av link-id.
 
-    Celler sorterade på id med origin; riktade länkar sorterade på
-    (source, target, kind); rj-länkar sorterade på (source, target).
+    Celler sorterade på id med origin; ALLA riktade länkar (inkl. rensade ur
+    adjacensen) sorterade på (source, target, kind, traversable), var och en
+    med traverserbarhetsflagga T (1 = i adjacensen, 0 = rensad). Raketjump-
+    länkar är L-poster med kind=rocketjump (ingen separat R-sektion).
     Separator: tab mellan fält, LF mellan poster, ingen avslutande LF.
     """
     lines = []
     for cid, c in sorted(zip(doc["cell_ids"], doc["cells"])):
         lines.append(f"C\t{cid}\t{_fmt(c[0])}\t{_fmt(c[1])}\t{_fmt(c[2])}")
-    lrecs = sorted(
-        (int(l["from"]), int(l["to_cell"]), str(l["kind"]).lower())
-        for l in doc["links"]
-    )
-    for src, dst, kind in lrecs:
-        lines.append(f"L\t{src}\t{dst}\t{kind}")
-    rj = doc.get("rj_links")
-    if isinstance(rj, list):
-        for src, dst in sorted(
-            (int(l["from"]), int(l["to_cell"])) for l in rj
-        ):
-            lines.append(f"R\t{src}\t{dst}")
+    lrecs = []
+    for l in doc["links"]:
+        t = 1 if l.get("traversable", True) else 0
+        lrecs.append((int(l["from"]), int(l["to_cell"]), str(l["kind"]).lower(), t))
+    lrecs.sort()
+    for src, dst, kind, t in lrecs:
+        lines.append(f"L\t{src}\t{dst}\t{kind}\t{t}")
     return "\n".join(lines).encode("utf-8")
 
 
