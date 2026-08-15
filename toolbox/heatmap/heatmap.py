@@ -35,6 +35,13 @@ def die(msg, code=2):
     sys.exit(code)
 
 
+# Explicit kompatibilitetslista (KONTRAKT, versionsmatris): de
+# obducera-scheman denna heatmap-version lasar. Ytan heatmap konsumerar
+# (populationer/kluster med cell/klass/n_forsok/kluster_id) ar
+# oforandrad mellan v2 och v3.
+OBDUCERA_COMPAT = ("verktygslada/obducera/2", "verktygslada/obducera/3")
+
+
 def load_json(path):
     try:
         with open(path) as f:
@@ -225,9 +232,9 @@ def main(argv=None):
         die(f"okand klass '{a.klass}'")
 
     obd = load_json(a.obduktion)
-    if obd.get("schema") != "verktygslada/obducera/2":
-        die(f"obduktion: forvantad schema verktygslada/obducera/2, "
-            f"fann {obd.get('schema')!r}")
+    if obd.get("schema") not in OBDUCERA_COMPAT:
+        die(f"obduktion: okant schema {obd.get('schema')!r}; "
+            f"kompatibel lista: {list(OBDUCERA_COMPAT)}")
     graph = load_json(a.graf)
     if graph.get("schema") != "qw-nav-graph/1":
         die(f"graf: forvantad schema qw-nav-graph/1, "

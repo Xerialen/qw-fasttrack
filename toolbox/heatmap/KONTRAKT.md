@@ -9,6 +9,18 @@ JSON-sammanfattning).
 Inga servrar, ingen riggkontakt. Indatafilerna är de enda källorna;
 inget hämtas, inget tidsstämplas.
 
+## Versionsmatris (obducera-scheman denna heatmap-version läser)
+
+| obducera-schema | läses | anledning |
+|---|---|---|
+| `verktygslada/obducera/2` | ja | ursprungsschemat; heatmap-konsumentytan |
+| `verktygslada/obducera/3` | ja | v2→v3 ändrade räknarregler (t.ex. UT-peak-reset) men **inte** konsumentytan: `populationer`/`kluster` med `cell`/`klass`/`n_forsok`/`kluster_id` är oförändrad |
+| annat (inkl. saknat `schema`-fält) | nej | exit 2 med kompatibilitetslistan i felmeddelandet — fail-closed |
+
+Listan är explicit i koden (`OBDUCERA_COMPAT`); ett nytt obducera-
+schema kräver en medveten uppdatering av denna matris och koden.
+Kodkommentarer/felmeddelanden: se `OBDUCERA_COMPAT` i `heatmap.py`.
+
 ## Kommando
 
 ```
