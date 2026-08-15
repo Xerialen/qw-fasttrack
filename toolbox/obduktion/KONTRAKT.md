@@ -250,11 +250,13 @@ Samma `--serie` + flaggor två gånger ⇒ identiska bytes (inkl. avslutande LF)
 Fixtur: syntetisk miniserie under `toolbox/obduktion/tests/fixtures/`,
 **inte** T1h-rådata (T1h är utvecklingskörning, inte orakel).
 
-## REVISION 2.1 (slice-integration, opus5) — ADDITIV
+## REVISION 2.1 (slice-integration, opus5; RÄTTAD av Fable vid integrationsmergen) — ADDITIV
 
-Schemasträngen är **oförändrad**: `verktygslada/obducera/2`. Det är avsiktligt.
-`heatmap.py` hårdvaliderar exakt den strängen (`heatmap.py:224`), så en bump
-till `/3` hade brutit qwens verktyg för en ändring som bara lägger till fält.
+RÄTTELSE (Fable, merge 94ff576): schemasträngen är `verktygslada/obducera/3` —
+groks klusternyckeländring (population/sida/rutt vid unknown) ÄNDRADE betydelse
+och bumpades korrekt före mergen; qwens heatmap accepterar [/2, /3] sedan
+da501f4. Opus-textens `/2`-antagande gällde slice-branchens äldre bas och
+utgår. Den additiva REGELN nedan gäller oförändrad framåt.
 
 **Additiv regel (samma princip som B:s `p_*`-familj):** en konsument som möter
 ett okänt rotfält ska **ignorera det**, aldrig fela. Nya fält får tillkomma utan
