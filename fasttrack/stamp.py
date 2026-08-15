@@ -11,7 +11,11 @@ Radkontrakt (A):
 Radlagret: inga null; sentinel 4294967295 = okänd cell (luft/missing).
 Domlagret (attributionssammanfattningen): explicit "unknown", aldrig sentinel.
 Decimalkontrakt: t 3 dec, ingen exponentform.
-graph_stamp: se WORK_LOGS/graphstamp-kontrakt.md.
+
+Två identitetsnivåer (se WORK_LOGS/graphstamp-kontrakt.md):
+- nivå 1 ``graph_stamp`` (FNV-1a-64 över counts) — billig per-rad-pin.
+- nivå 2 ``graph_content_hash`` (SHA-256 över kanonisk inventering) —
+  strukturidentitet, ALDRIG per rad; emitteras i .attr-sidovagnen.
 """
 
 from __future__ import annotations
@@ -40,16 +44,55 @@ def fnv1a64(data: bytes) -> int:
 
 
 def graph_stamp(map_name: str, cells: int, links: int, rj_links: int) -> int:
-    """FNV-1a-64 över (map_utf8 ++ LE32(cells) ++ LE32(links) ++ LE32(rj_links))."""
+    """Nivå 1: FNV-1a-64 över (map_utf8 ++ LE32(cells) ++ LE32(links) ++ LE32(rj_links))."""
     return fnv1a64(map_name.encode("utf-8") + struct.pack("<III", cells, links, rj_links))
 
 
-def load_dm3_graph(path: str | Path) -> GraphContract:
-    """Läser dm3-dumpen (länkar som dict) och bygger ett GraphContract."""
+def _fmt(value) -> str:
+    """Kanonisk koordinat-/talform: heltal utan decimal, annars %.2f (runda-halv-jämn)."""
+    v = float(value)
+    if v == int(v):
+        return str(int(v))
+    return format(round(v, 2), ".2f")
+
+
+def canonical_inventory(doc: dict) -> bytes:
+    """Nivå 2: kanonisk inventering — byte-stabil, oberoende av link-id.
+
+    Celler sorterade på id med origin; riktade länkar sorterade på
+    (source, target, kind); rj-länkar sorterade på (source, target).
+    Separator: tab mellan fält, LF mellan poster, ingen avslutande LF.
+    """
+    lines = []
+    for cid, c in sorted(zip(doc["cell_ids"], doc["cells"])):
+        lines.append(f"C\t{cid}\t{_fmt(c[0])}\t{_fmt(c[1])}\t{_fmt(c[2])}")
+    lrecs = sorted(
+        (int(l["from"]), int(l["to_cell"]), str(l["kind"]).lower())
+        for l in doc["links"]
+    )
+    for src, dst, kind in lrecs:
+        lines.append(f"L\t{src}\t{dst}\t{kind}")
+    rj = doc.get("rj_links")
+    if isinstance(rj, list):
+        for src, dst in sorted(
+            (int(l["from"]), int(l["to_cell"])) for l in rj
+        ):
+            lines.append(f"R\t{src}\t{dst}")
+    return "\n".join(lines).encode("utf-8")
+
+
+def graph_content_hash(doc: dict) -> str:
+    """Nivå 2: SHA-256 (hex) över kanonisk inventering — strukturidentitet.
+
+    SHA-256 (inte FNV-1a-64) eftersom nivå 2 är en strukturell domgrind
+    (structural_missing_link får bara avges mot matchande nivå 2) och en
+    icke-kryptografisk 64-bit-hash inte ger den kollisionsresistensen.
+    """
+    return hashlib.sha256(canonical_inventory(doc)).hexdigest()
+
+
+def _build_graph_from_doc(d: dict, path: Path) -> GraphContract:
     raw = Path(path).read_bytes()
-    d = json.loads(raw)
-    if d.get("schema") != SCHEMA:
-        raise ValueError(f"ogiltigt schema {d.get('schema')!r}")
     cells = [list(c) for c in d["cells"]]
     cell_ids = [int(x) for x in d["cell_ids"]]
     link_ids = [int(x) for x in d["link_ids"]]
@@ -75,6 +118,24 @@ def load_dm3_graph(path: str | Path) -> GraphContract:
         cell_z_by_id={cid: float(c[2]) for cid, c in zip(cell_ids, cells)},
         cell_by_id={cid: c for cid, c in zip(cell_ids, cells)},
     )
+
+
+def load_dm3_graph(path: str | Path) -> GraphContract:
+    """Läser dm3-dumpen (länkar som dict) och bygger ett GraphContract."""
+    p = Path(path)
+    raw = p.read_bytes()
+    d = json.loads(raw)
+    if d.get("schema") != SCHEMA:
+        raise ValueError(f"ogiltigt schema {d.get('schema')!r}")
+    return _build_graph_from_doc(d, p)
+
+
+def load_dm3_doc(path: str | Path) -> dict:
+    """Rå dump-dict (för nivå 2-hash + grafen)."""
+    d = json.loads(Path(path).read_bytes())
+    if d.get("schema") != SCHEMA:
+        raise ValueError(f"ogiltigt schema {d.get('schema')!r}")
+    return d
 
 
 def stamp_rows(in_path, out_path, graph: GraphContract, stamp: int, bot_ent: int = 1):
@@ -149,11 +210,14 @@ def attribution_summary(state: Attribution, graph: GraphContract) -> dict:
 
 
 def stamp_file(in_path, out_path, attr_path, graph: GraphContract, stamp: int,
-               bot_ent: int = 1) -> dict:
+               content_hash: str | None = None, bot_ent: int = 1) -> dict:
     n, state = stamp_rows(in_path, out_path, graph, stamp, bot_ent)
     summary = attribution_summary(state, graph)
     summary["n_rader"] = n
     summary["graph_stamp"] = str(stamp)
+    # nivå 2 endast i sidovagnen, ALDRIG per rad
+    if content_hash is not None:
+        summary["graph_content_hash"] = content_hash
     if attr_path is not None:
         Path(attr_path).write_text(json.dumps(summary, ensure_ascii=False))
     return summary
@@ -172,9 +236,12 @@ def main(argv) -> int:
     ap.add_argument("--attr", dest="attr_path", default=None)
     ap.add_argument("--bot", type=int, default=1)
     a = ap.parse_args(argv)
-    graph = load_dm3_graph(a.graph)
+    doc = load_dm3_doc(a.graph)
+    graph = _build_graph_from_doc(doc, Path(a.graph))
     stamp = graph_stamp(a.map, a.cells, a.links, a.rj)
-    summary = stamp_file(a.in_path, a.out_path, a.attr_path, graph, stamp, a.bot)
+    content_hash = graph_content_hash(doc)
+    summary = stamp_file(a.in_path, a.out_path, a.attr_path, graph, stamp,
+                         content_hash, a.bot)
     print(json.dumps(summary, ensure_ascii=False))
     return 0
 
