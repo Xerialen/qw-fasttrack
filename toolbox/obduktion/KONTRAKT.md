@@ -226,3 +226,70 @@ atgard_kandidat` plus `prio` på åtgärdsraden.
 Samma `--serie` + flaggor två gånger ⇒ identiska bytes (inkl. avslutande LF).
 Fixtur: syntetisk miniserie under `toolbox/obduktion/tests/fixtures/`,
 **inte** T1h-rådata (T1h är utvecklingskörning, inte orakel).
+
+## REVISION 2.1 (slice-integration, opus5) — ADDITIV
+
+Schemasträngen är **oförändrad**: `verktygslada/obducera/2`. Det är avsiktligt.
+`heatmap.py` hårdvaliderar exakt den strängen (`heatmap.py:224`), så en bump
+till `/3` hade brutit qwens verktyg för en ändring som bara lägger till fält.
+
+**Additiv regel (samma princip som B:s `p_*`-familj):** en konsument som möter
+ett okänt rotfält ska **ignorera det**, aldrig fela. Nya fält får tillkomma utan
+bump; ett fält som *ändrar betydelse* kräver bump.
+
+### Nya rotfält
+
+```
+graph_stamp     sträng   # nivå 1, decimalsträng, eller "unknown"
+stamp_kontroll  objekt   # {kalla, referens, ok, avvikande, ostamplade}
+```
+
+`stamp_kontroll.kalla` är `manifest` | `rader` | `konflikt` | `ingen`.
+
+### Grafvalidering per rad (bindande)
+
+Serien har **en** referensgraf, upplöst en gång innan raderna läses:
+
+1. `manifest.json` i `--stamplar` (eller i serien) — A:s egen deklaration.
+2. Annars radernas `graph_stamp`, men bara om de är **eniga**.
+3. Är de oeniga finns ingen referens (`kalla: konflikt`). Att välja majoriteten
+   vore en gissning, och en tyst sådan.
+
+Varje tick valideras mot referensen. En rad som bär en **annan** graf får
+`cell` och `lank` nollställda till `"unknown"` och räknas som `avvikande`.
+Bindningen återskapas aldrig: ett cell-id är bara ett namn på en cell *inom en
+graf*, så att behålla den vore att peka ut fel plats med full säkerhet.
+
+`ostamplade` (rad utan `graph_stamp`) är **inte** en avvikelse — frånvaro av
+facit är inte ett facit. De tre räknarna hålls isär just därför.
+
+### A:s stämpelformat
+
+Adaptern läser A:s radformat `{t, bot, cell, verdict, schema, graph_stamp}`:
+
+- `schema` läses som `graph_contract` (efter det äldre namnet).
+- `graph_stamp` normaliseras till decimalsträng (u64 > 2^53).
+- `cell = 4294967295` är A:s sentinel för **luftburen** tick och blir
+  `"unknown"` — boten står inte i någon cell. Det är något annat än en missad
+  stämpling, och `verdict` är det som skiljer dem.
+- Fogning mot rådataserien sker på radindex, med `t` avrundat till 3 decimaler
+  som fallback.
+
+### Genomsläppningar (ingen tolkning)
+
+| Fält | Källa | Regel |
+|---|---|---|
+| `plan` | spår B | **rå** genomsläppning |
+| `verdict` | spår A | rå genomsläppning |
+| `attr` (per försök) | A:s `<ben>.attr.json` | läses av adaptern, **binds inte** här |
+
+**`plan` får aldrig "städas".** B:s `runway`, `sj_progress` och `first_air_vz`
+är signerade och bär sin frånvaro i egna `*_measured`-flaggor, just därför att
+`-1.0` och `0.0` är giltiga avläsningar. En adapter som översätter dem till
+`unknown` återinför exakt den bugg B redan har rättat — en bot en enhet förbi
+läppen skulle bli en icke-mätning i just den zon V296 handlar om.
+Testet `PlanPassthrough` vaktar detta.
+
+`attr` bär A:s per-försöksattribution (`attribution.cell_id`,
+`drop_from_cell`, `start_cell`). Den läses här men **binds inte**: kopplingen
+fall → landningscell ägs av klassningen (spår I).

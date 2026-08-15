@@ -4,8 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .adapter import (apply_kap, discover_forsok, load_ticks, merge_navmesh,
-                      population_etikett)
+from .adapter import (apply_kap, discover_forsok, load_attr, load_ticks,
+                      merge_navmesh, population_etikett, resolve_graph_stamp)
 from .dump import SCHEMA
 from .klassa import finalize_handelse, klassa_forsok
 from .kluster import (klustra, numrera_och_prioritera, raknare,
@@ -20,11 +20,17 @@ POP_PREFIX = {
 
 
 def _process_forsok(forsok: list[dict]) -> tuple[list[dict], list[Any], list[Any],
-                                                 dict]:
+                                                 dict, dict]:
     raw_events: list[dict] = []
     stamps: list[Any] = []
     contracts: list[Any] = []
     n_stamped = n_unknown = 0
+    # Grafkontrollen per tick: höll raden samma graf som serien, bar den ingen
+    # stämpel alls, eller pekade den på en annan graf? Den tredje gruppen är
+    # bunden till "unknown" av adaptern — den räknas här så att den inte
+    # försvinner tyst in i unknown-högen tillsammans med "ostämplad", som är
+    # något helt annat.
+    n_stamp_ok = n_stamp_avvik = n_ostamplad = 0
     for f in forsok:
         ticks = load_ticks(f)
         for tk in ticks:
@@ -32,12 +38,20 @@ def _process_forsok(forsok: list[dict]) -> tuple[list[dict], list[Any], list[Any
                 n_stamped += 1
             else:
                 n_unknown += 1
+            if tk.get("stamp_avvik"):
+                n_stamp_avvik += 1
+            elif tk.get("graph_stamp"):
+                n_stamp_ok += 1
+            else:
+                n_ostamplad += 1
             if tk.get("navmesh_stamp") is not None:
                 stamps.append(tk["navmesh_stamp"])
             if tk.get("graph_contract") is not None:
                 contracts.append(tk["graph_contract"])
         raw_events.extend(klassa_forsok(f, ticks))
-    return raw_events, stamps, contracts, {"stamplade": n_stamped, "unknown": n_unknown}
+    return (raw_events, stamps, contracts,
+            {"stamplade": n_stamped, "unknown": n_unknown},
+            {"ok": n_stamp_ok, "avvikande": n_stamp_avvik, "ostamplade": n_ostamplad})
 
 
 def _stamp_population(handelser: list[dict], kluster: list[dict],
@@ -109,6 +123,15 @@ def obducera(serie: str | Path, *,
         raise ValueError("arm måste vara A, B, AB eller utelämnad")
     arm_arg = None if arm in (None, "AB") else arm
     upptackta = discover_forsok(serie_p, arm_arg, ent, stamp_p)
+    # Vilken graf serien är mätt mot, EN gång, innan någon rad läses för allvar.
+    # Varje tick valideras sedan mot den; en rad från en annan graf blir obunden
+    # i stället för felbunden.
+    graf = resolve_graph_stamp(upptackta, stamp_p, serie_p)
+    for f in upptackta:
+        f["ref_stamp"] = None if graf["referens"] == "unknown" else graf["referens"]
+        # Spår A:s per-försöks-attribution, läst men inte tolkad här: bindningen
+        # av ett fall till landningscellen ägs av klassningen (spår I).
+        f["attr"] = load_attr(f)
     giltiga, kap = apply_kap(upptackta)
     n_kap = kap["n"]
 
@@ -125,11 +148,16 @@ def obducera(serie: str | Path, *,
     pop_cache: dict[str, dict] = {}
     all_stamps: list[Any] = []
     all_contracts: list[Any] = []
+    stamp_kontroll = {"ok": 0, "avvikande": 0, "ostamplade": 0}
     for kind in POP_KINDS:
         members = _pop_members(giltiga, kind)
-        raw, stamps, contracts, bind = _process_forsok(members)
+        raw, stamps, contracts, bind, sk = _process_forsok(members)
         all_stamps.extend(stamps)
         all_contracts.extend(contracts)
+        if kind == "alla_giltiga":
+            # Räknat på alla giltiga försök: grafkontrollen är en egenskap hos
+            # datat, inte hos evidensfiltret, och ska inte ändras av --regim.
+            stamp_kontroll = sk
         obj, atg = _population_obj(
             kind, n_kap, members, raw, bind,
             with_atgarder=(kind == ev_kind),
@@ -157,6 +185,12 @@ def obducera(serie: str | Path, *,
         "arm": arm_out,
         "regim": regim,
         "graph_contract": _one_or_unknown(all_contracts),
+        "graph_stamp": graf["referens"],
+        "stamp_kontroll": {
+            "kalla": graf["kalla"],
+            "referens": graf["referens"],
+            **stamp_kontroll,
+        },
         "navmesh_stamp": merge_navmesh(all_stamps),
         "bind_statistik": ev["bind_statistik"],
         "kap": kap,

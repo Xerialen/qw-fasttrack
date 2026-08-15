@@ -10,6 +10,11 @@ from .dump import cell_str, lank_str, q, q_xyz
 
 STAMP_CELL_KEYS = ("cell_id", "cell")
 STAMP_LINK_KEYS = ("link_id", "link", "lank", "aktiv_lank", "chosen_link")
+# Spår A:s stämpelrad bär kontraktsnamnet i "schema" och grafidentiteten i "graph_stamp"
+# (decimalsträng — u64 överstiger 2^53 och skulle tappa precision som JSON-tal).
+# "graph_contract" och "navmesh_stamp" är de äldre namnen och läses först.
+STAMP_CONTRACT_KEYS = ("graph_contract", "schema")
+STAMP_ID_KEYS = ("graph_stamp",)
 T1H_CYKEL = re.compile(r"^c(\d{3})$")
 T1H_BEN = ("ut_ring", "in_ring", "ut_tunnel", "in_tunnel", "ut_vast", "in_vast")
 ATTEMPT = re.compile(r"^attempt_(\d+)\.jsonl$")
@@ -23,8 +28,32 @@ def _first(d: dict, keys: tuple[str, ...]):
     return None
 
 
-def extract_stamp(row: dict, player: dict | None = None) -> dict:
-    """Plocka stämpel från rad och ev. player-objekt. Gissar aldrig xyz."""
+def stamp_id_str(value) -> str | None:
+    """Grafidentiteten som sträng. u64 skrivs som decimalsträng i JSONL (kontraktet §4)."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return str(int(value)) if value == int(value) else str(value)
+    if isinstance(value, str):
+        s = value.strip()
+        return s or None
+    return None
+
+
+def extract_stamp(row: dict, player: dict | None = None,
+                  ref_stamp: str | None = None) -> dict:
+    """Plocka stämpel från rad och ev. player-objekt. Gissar aldrig xyz.
+
+    När `ref_stamp` är satt valideras radens `graph_stamp` mot den. En rad som
+    bär en ANNAN graf får sin cell- och länkbindning nollställd till
+    ``"unknown"``: ett cell-id är bara ett namn på en cell *inom en graf*, så
+    att behålla bindningen vore att peka ut fel plats med full säkerhet. Vi
+    gissar inte vilken graf som är rätt — vi vägrar binda.
+    """
     sources = []
     if player:
         sources.append(player)
@@ -33,6 +62,9 @@ def extract_stamp(row: dict, player: dict | None = None) -> dict:
     lank = "unknown"
     stamp = None
     contract = None
+    graph_stamp = None
+    plan = None
+    verdict = None
     for src in sources:
         if not isinstance(src, dict):
             continue
@@ -44,8 +76,29 @@ def extract_stamp(row: dict, player: dict | None = None) -> dict:
             lank = lank_str(ln)
         if stamp is None and src.get("navmesh_stamp") is not None:
             stamp = src["navmesh_stamp"]
-        if contract is None and src.get("graph_contract") is not None:
-            contract = src["graph_contract"]
+        if contract is None:
+            contract = _first(src, STAMP_CONTRACT_KEYS)
+        if graph_stamp is None:
+            graph_stamp = stamp_id_str(_first(src, STAMP_ID_KEYS))
+        # Spår B:s planerartelemetri. Ren genomsläppning: fälten tolkas inte här,
+        # och särskilt görs INGEN sentinelöversättning. B:s signerade fält
+        # (runway, sj_progress, first_air_vz) bär sin frånvaro i egna
+        # *_measured-flaggor just för att -1.0 och 0.0 är giltiga avläsningar;
+        # den som "städar" dem här återinför buggen B redan har rättat.
+        if plan is None and isinstance(src.get("plan"), dict):
+            plan = src["plan"]
+        # A:s attributionsdom för ticken (covered/airborne/off_grid/missing).
+        # Genomsläppning, ingen tolkning: den förklarar VARFÖR en tick saknar
+        # cell — en luftburen tick bär sentinelen 4294967295 därför att boten
+        # inte står i någon cell, vilket är något helt annat än att stämplingen
+        # missade. Domlagret behöver kunna skilja de två.
+        if verdict is None and isinstance(src.get("verdict"), str):
+            verdict = src["verdict"]
+
+    avvik = bool(ref_stamp and graph_stamp and graph_stamp != ref_stamp)
+    if avvik:
+        cell = "unknown"
+        lank = "unknown"
     bind = "stamped" if cell != "unknown" else "unknown"
     return {
         "cell": cell,
@@ -53,6 +106,10 @@ def extract_stamp(row: dict, player: dict | None = None) -> dict:
         "bind": bind,
         "navmesh_stamp": stamp,
         "graph_contract": contract,
+        "graph_stamp": graph_stamp,
+        "stamp_avvik": avvik,
+        "plan": plan,
+        "verdict": verdict,
     }
 
 
@@ -105,7 +162,8 @@ def _align_stamp(sidecars: list[dict] | None, idx: int, t: float | None) -> dict
 
 
 def iter_ticks(jsonl: Path, ent: int, stamplar: Path | None = None,
-               serie: Path | None = None) -> Iterator[dict]:
+               serie: Path | None = None,
+               ref_stamp: str | None = None) -> Iterator[dict]:
     sidecars = _load_stamp_sidecar(jsonl, stamplar, serie)
     with jsonl.open(encoding="utf-8") as fh:
         for i, line in enumerate(fh):
@@ -123,10 +181,11 @@ def iter_ticks(jsonl: Path, ent: int, stamplar: Path | None = None,
                     if k not in merged or merged[k] is None:
                         merged[k] = v
                 row = merged
-            yield from _ticks_from_row(row, ent, i)
+            yield from _ticks_from_row(row, ent, i, ref_stamp)
 
 
-def _ticks_from_row(row: dict, ent: int, idx: int) -> Iterator[dict]:
+def _ticks_from_row(row: dict, ent: int, idx: int,
+                    ref_stamp: str | None = None) -> Iterator[dict]:
     t = row.get("t")
     players = row.get("players") or []
     picked = None
@@ -137,7 +196,7 @@ def _ticks_from_row(row: dict, ent: int, idx: int) -> Iterator[dict]:
     if picked is None and len(players) == 1:
         picked = players[0]
     if picked is not None and picked.get("origin") is not None:
-        stamp = extract_stamp(row, picked)
+        stamp = extract_stamp(row, picked, ref_stamp)
         yield {
             "t": t,
             "origin": list(picked["origin"]),
@@ -152,8 +211,8 @@ def _ticks_from_row(row: dict, ent: int, idx: int) -> Iterator[dict]:
     if row.get("ev") == "bot_stall" or isinstance(row.get("stall"), dict):
         ev = row["stall"] if isinstance(row.get("stall"), dict) else row
         origin = ev.get("origin") or ev.get("pos")
-        stamp = extract_stamp(ev)
-        stamp2 = extract_stamp(row)
+        stamp = extract_stamp(ev, None, ref_stamp)
+        stamp2 = extract_stamp(row, None, ref_stamp)
         if stamp["cell"] == "unknown":
             stamp["cell"] = stamp2["cell"]
         if stamp["lank"] == "unknown":
@@ -316,7 +375,45 @@ def _undanta_ut(ben: str, meta: dict) -> bool:
 
 def load_ticks(forsok: dict) -> list[dict]:
     return list(iter_ticks(forsok["jsonl"], forsok["ent"],
-                           forsok.get("stamplar"), forsok.get("serie")))
+                           forsok.get("stamplar"), forsok.get("serie"),
+                           forsok.get("ref_stamp")))
+
+
+def load_attr(forsok: dict) -> dict:
+    """Spår A:s per-försöks-attribution (``<ben>.attr.json``), eller tomt.
+
+    A kör GraphMatcher över hela försöket och skriver ned var det faktiskt tog
+    slut — ``attribution.cell_id`` samt ``drop_from_cell``/``start_cell``. Det
+    är en annan fråga än "vilken cell stod boten i på den här ticken", och det
+    är den fråga en fallbindning ska ställa: ett fall triggar på en luftburen
+    tick, vars cell är den boten *lämnade*, inte den den landade i.
+
+    Adaptern läser filen och lägger den på försöket. Den binder inte själv —
+    klassningen äger den kopplingen (spår I).
+    """
+    stamplar = forsok.get("stamplar")
+    jsonl = forsok.get("jsonl")
+    serie = forsok.get("serie")
+    if not jsonl:
+        return {}
+    cands = [jsonl.with_name(jsonl.stem + ".attr.json")]
+    if stamplar is not None:
+        if serie is not None:
+            try:
+                rel = jsonl.relative_to(serie)
+                cands.append((stamplar / rel).with_name(jsonl.stem + ".attr.json"))
+            except ValueError:
+                cands.append(stamplar / f"{jsonl.stem}.attr.json")
+        else:
+            cands.append(stamplar / f"{jsonl.stem}.attr.json")
+    for c in cands:
+        if c.is_file():
+            try:
+                data = json.loads(c.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                return {}
+            return data if isinstance(data, dict) else {}
+    return {}
 
 
 def apply_regim_filter(forsok: list[dict], regim: str) -> tuple[list[dict], dict]:
@@ -383,6 +480,57 @@ def apply_kap(forsok: list[dict]) -> tuple[list[dict], dict]:
         "per_arm": {k: hela[k] for k in sorted(hela)},
         "kastade_cykler": {k: kastade.get(k, []) for k in sorted(hela)},
     }
+
+
+def _manifest_stamp(stamplar: Path | None, serie: Path | None) -> tuple[str | None, str | None]:
+    """Grafidentiteten ur A:s manifest, om det finns. (stamp, schema)."""
+    for base in (stamplar, serie):
+        if base is None:
+            continue
+        p = base / "manifest.json"
+        if not p.is_file():
+            continue
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            s = stamp_id_str(data.get("graph_stamp"))
+            if s:
+                return s, data.get("schema")
+    return None, None
+
+
+def resolve_graph_stamp(forsok: list[dict], stamplar: Path | None,
+                        serie: Path | None) -> dict:
+    """Vilken graf serien är mätt mot — manifestet först, radernas stämplar sedan.
+
+    Detta är obduktionens motsvarighet till B:s ``PlanContract``: ETT värde som
+    raderna sedan valideras mot. Ordningen är inte godtycklig. Manifestet är A:s
+    egen deklaration och väger tyngst. Saknas det får raderna tala, men bara om
+    de är eniga — är de det inte finns ingen referens att välja, och att välja
+    majoriteten vore precis den gissning kontraktet förbjuder. Då blir varje
+    stämplad rad obunden i stället.
+    """
+    stamp, schema = _manifest_stamp(stamplar, serie)
+    if stamp:
+        return {"referens": stamp, "kalla": "manifest", "schema": schema}
+
+    seen: set[str] = set()
+    for f in forsok:
+        for tk in iter_ticks(f["jsonl"], f["ent"], f.get("stamplar"), f.get("serie")):
+            gs = tk.get("graph_stamp")
+            if gs:
+                seen.add(gs)
+                if len(seen) > 1:
+                    break
+        if len(seen) > 1:
+            break
+    if len(seen) == 1:
+        return {"referens": next(iter(seen)), "kalla": "rader", "schema": None}
+    if len(seen) > 1:
+        return {"referens": "unknown", "kalla": "konflikt", "schema": None}
+    return {"referens": "unknown", "kalla": "ingen", "schema": None}
 
 
 def population_etikett(kind: str, n_kap: int | None) -> str:
