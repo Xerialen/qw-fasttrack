@@ -2,26 +2,17 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
-SCHEMA = "verktygslada/dashadapter/1"
+SCHEMA = "verktygslada/dashadapter/2"
 
-REASONS = (
-    "displacement",
-    "prestrafe_deficit",
-    "air_commit_off",
-    "air_commit_timeout",
-    "speedjump_stall",
-)
+I_KLASSER = ("fall", "fastnad", "timeout", "avsett_drop", "stall")
 
-KLASS_TO_REASON = {
-    "fall": "air_commit_timeout",
-    "fastnad": "displacement",
-    "timeout": "air_commit_timeout",
-    "avsett_drop": "prestrafe_deficit",
-    "stall": "speedjump_stall",
-}
+
+class TemplateIncompatible(RuntimeError):
+    """Templaten saknar I-klassnycklar — mappa inte tyst."""
 
 
 def dumps(obj: Any) -> str:
@@ -34,6 +25,21 @@ def json_literal(obj: Any) -> str:
                       sort_keys=True).replace("<", "\\u003c")
 
 
+def template_reason_keys(template_text: str) -> set[str]:
+    return set(re.findall(r'key:\s*"([^"]+)"', template_text))
+
+
+def require_i_classes(template_text: str) -> None:
+    have = template_reason_keys(template_text)
+    missing = [k for k in I_KLASSER if k not in have]
+    if missing:
+        raise TemplateIncompatible(
+            "map-template saknar I-klassnycklar %s (hittade %s). "
+            "Använd toolbox/dashboard-i-classes, mappa inte tyst."
+            % (missing, sorted(have))
+        )
+
+
 def _cell_id(raw: str, kluster_id: str) -> int | str:
     if raw and raw != "unknown":
         try:
@@ -43,19 +49,9 @@ def _cell_id(raw: str, kluster_id: str) -> int | str:
     return kluster_id
 
 
-def _reason_key(klass: str, stall_reason: str | None = None) -> str:
-    if klass == "stall" and stall_reason in REASONS:
-        return stall_reason
-    return KLASS_TO_REASON.get(klass, "displacement")
-
-
 def _merge_key(cell: dict) -> tuple:
     c = cell["cell"]
-    if isinstance(c, str) and str(c).startswith("K"):
-        return ("id", c, cell["reason"])
-    if isinstance(c, str) and str(c).startswith("XK"):
-        return ("id", c, cell["reason"])
-    if isinstance(c, str) and str(c).startswith("GK"):
+    if isinstance(c, str) and str(c)[:2] in ("K0", "XK", "GK"):
         return ("id", c, cell["reason"])
     return ("cell", c, cell["reason"])
 
@@ -63,7 +59,10 @@ def _merge_key(cell: dict) -> tuple:
 def _kluster_to_cell(k: dict) -> dict:
     cid = _cell_id(str(k.get("cell") or "unknown"), k.get("kluster_id") or "K")
     klass = k.get("klass") or "unknown"
-    reason = _reason_key(klass)
+    if klass not in I_KLASSER:
+        raise TemplateIncompatible(
+            "okänd obducera-klass %r — ingen fallback-mappning" % klass
+        )
     n = int(k.get("n_forsok") or 0)
     pos = k.get("centroid") or k.get("locus")
     if isinstance(pos, list) and len(pos) >= 3:
@@ -73,7 +72,7 @@ def _kluster_to_cell(k: dict) -> dict:
         pos = None
     samples = []
     for fid in (k.get("forsok_id") or [])[:8]:
-        samples.append({"forsok_id": fid, "klass": klass, "reason": reason})
+        samples.append({"forsok_id": fid, "klass": klass, "reason": klass})
     links = {}
     lank = k.get("lank")
     if lank and lank != "unknown":
@@ -82,9 +81,9 @@ def _kluster_to_cell(k: dict) -> dict:
         "cell": cid,
         "pos": pos,
         "n": n,
-        "reasons": {reason: n},
+        "reasons": {klass: n},
         "links": links,
-        "reason": reason,
+        "reason": klass,
         "samples": samples,
     }
 
@@ -170,7 +169,15 @@ def load_map_assets(map_dir: Path | None) -> tuple[dict, dict, dict]:
     return graph, ents, linkgeo
 
 
-def convert(doc: dict, map_dir: Path | None = None) -> dict:
+def convert(doc: dict, map_dir: Path | None = None,
+            map_template: str | Path | None = None) -> dict:
+    if map_template is None:
+        raise TemplateIncompatible(
+            "--map-template krävs (version-detektering, ingen tyst mappning)"
+        )
+    text = (map_template if isinstance(map_template, str)
+            else Path(map_template).read_text(encoding="utf-8"))
+    require_i_classes(text)
     graph, ents, linkgeo = load_map_assets(map_dir)
     return {
         "entities": ents,
@@ -180,6 +187,7 @@ def convert(doc: dict, map_dir: Path | None = None) -> dict:
     }
 
 
-def convert_path(obducera_path: Path, map_dir: Path | None = None) -> dict:
+def convert_path(obducera_path: Path, map_dir: Path | None = None,
+                 map_template: str | Path | None = None) -> dict:
     doc = json.loads(obducera_path.read_text(encoding="utf-8"))
-    return convert(doc, map_dir)
+    return convert(doc, map_dir, map_template)

@@ -51,8 +51,10 @@ def render_html(proposal: dict, map_template: str) -> str:
 
 
 def default_map_template() -> Path:
-    return Path.home() / "rtx-cost-exp/testsuite/dashboard/map-template.html"
+    """Bara default-sökväg — CLI kräver --map-template explicit."""
+    return Path.home() / "rtx-toolbox-dash/testsuite/dashboard/map-template.html"
 
 
 def default_map_dir() -> Path:
-    return Path.home() / "rtx-cost-exp/testsuite/dashboard/assets/maps/dm3"
+    # graf/entities är oförändrade på cc5fa8e; får läsas ur worktreet
+    return Path.home() / "rtx-toolbox-dash/testsuite/dashboard/assets/maps/dm3"
