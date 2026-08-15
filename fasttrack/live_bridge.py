@@ -68,6 +68,15 @@ class GraphContract:
     cell_z_by_id: dict[int, float]
     cell_by_id: dict[int, list[float]]
 
+    def __post_init__(self) -> None:
+        self._kind_by_link: dict[int, str] = {
+            int(link_id): str(self.links[idx][2])
+            for idx, link_id in enumerate(self.link_ids)
+        }
+
+    def link_kind(self, link_id: int) -> str:
+        return self._kind_by_link.get(int(link_id), "")
+
     def fuzzy_links(self, from_id: int, to_id: int,
                     xy_tol: float = 80.0, z_tol: float = 56.0) -> tuple[int, ...]:
         """Links whose endpoints lie within tolerance of the given cells.
@@ -231,6 +240,12 @@ class Attribution:
     # a hole. Reported apart from `missing_cells` so the red layer stays a list
     # of things worth fixing.
     off_grid_cells: dict = field(default_factory=dict)
+    # 1373-facit: ett fall (peak_drop_150) attribueras till SLÄPP-/LANDNINGS-
+    # cellen via sin Drop-länk; startcellen är enbart kontext.
+    start_cell: int | None = None
+    drop_from_cell: int | None = None
+    drop_landing_cell: int | None = None
+    drop_link_id: int | None = None
 
     def reset(self) -> None:
         self.used_cells.clear()
@@ -238,6 +253,10 @@ class Attribution:
         self.last_cell = None
         self.pending_from = None
         self.pending_since = None
+        self.start_cell = None
+        self.drop_from_cell = None
+        self.drop_landing_cell = None
+        self.drop_link_id = None
 
     def note_missing_ground(self, position) -> None:
         key = (int(position[0] // 32), int(position[1] // 32), int(position[2] // 32))
@@ -262,6 +281,8 @@ class Attribution:
 
     def observe(self, cell: int, now: float, graph: GraphContract) -> None:
         self.used_cells.add(cell)
+        if self.start_cell is None:
+            self.start_cell = cell
         if self.last_cell is None:
             self.last_cell = cell
             return
@@ -275,6 +296,7 @@ class Attribution:
                        or graph.fuzzy_links(self.pending_from, cell))
                 if hit:
                     self.used_links.update(hit)
+                    self._record_drop(hit, self.pending_from, cell, graph)
                     self.pending_from = None
                     self.pending_since = None
             else:
@@ -286,10 +308,21 @@ class Attribution:
                    or graph.fuzzy_links(self.last_cell, cell))
             if hit:
                 self.used_links.update(hit)
+                self._record_drop(hit, self.last_cell, cell, graph)
             else:
                 self.pending_from = self.last_cell
                 self.pending_since = now
         self.last_cell = cell
+
+    def _record_drop(self, hit, from_cell: int, landing_cell: int,
+                     graph: GraphContract) -> None:
+        """När en övergång löser sig via en Drop-länk är landningscellen facit."""
+        for link_id in hit:
+            if graph.link_kind(link_id).lower() == "drop":
+                self.drop_from_cell = from_cell
+                self.drop_landing_cell = landing_cell
+                self.drop_link_id = link_id
+                return
 
 
 @dataclass(eq=False)
