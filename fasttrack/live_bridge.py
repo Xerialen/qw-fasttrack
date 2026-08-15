@@ -240,12 +240,14 @@ class Attribution:
     # a hole. Reported apart from `missing_cells` so the red layer stays a list
     # of things worth fixing.
     off_grid_cells: dict = field(default_factory=dict)
-    # 1373-facit: ett fall (peak_drop_150) attribueras till SLÄPP-/LANDNINGS-
-    # cellen via sin Drop-länk; startcellen är enbart kontext.
+    # Fall (peak_drop) attribueras till SLÄPP-/LANDNINGSCELLEN via landnings-
+    # xyz-resolution, oavsett länk-kind (Fables ytbeslut). startcellen är
+    # enbart kontext. last_cell-semantiken är orörd.
     start_cell: int | None = None
     drop_from_cell: int | None = None
     drop_landing_cell: int | None = None
     drop_link_id: int | None = None
+    _airborne: bool = field(default=False, repr=False)
 
     def reset(self) -> None:
         self.used_cells.clear()
@@ -257,6 +259,7 @@ class Attribution:
         self.drop_from_cell = None
         self.drop_landing_cell = None
         self.drop_link_id = None
+        self._airborne = False
 
     def note_missing_ground(self, position) -> None:
         key = (int(position[0] // 32), int(position[1] // 32), int(position[2] // 32))
@@ -286,7 +289,15 @@ class Attribution:
         if self.last_cell is None:
             self.last_cell = cell
             return
+
+        was_airborne = self._airborne
+        self._airborne = False
+
         if cell == self.last_cell:
+            if was_airborne:
+                self.drop_from_cell = self.last_cell
+                self.drop_landing_cell = cell
+                self.drop_link_id = None
             return
 
         if self.pending_from is not None:
@@ -296,7 +307,6 @@ class Attribution:
                        or graph.fuzzy_links(self.pending_from, cell))
                 if hit:
                     self.used_links.update(hit)
-                    self._record_drop(hit, self.pending_from, cell, graph)
                     self.pending_from = None
                     self.pending_since = None
             else:
@@ -308,21 +318,38 @@ class Attribution:
                    or graph.fuzzy_links(self.last_cell, cell))
             if hit:
                 self.used_links.update(hit)
-                self._record_drop(hit, self.last_cell, cell, graph)
             else:
                 self.pending_from = self.last_cell
                 self.pending_since = now
+
+        # Landning efter luft: attributionsytan för fallet är landningscellen,
+        # satt via xyz-resolution oavsett länk-kind. drop_from_cell är läppen
+        # (last_cell före denna tilldelning).
+        if was_airborne:
+            self.drop_from_cell = self.last_cell
+            self.drop_landing_cell = cell
+            self.drop_link_id = self._landing_link(self.last_cell, cell, graph)
+
         self.last_cell = cell
 
-    def _record_drop(self, hit, from_cell: int, landing_cell: int,
-                     graph: GraphContract) -> None:
-        """När en övergång löser sig via en Drop-länk är landningscellen facit."""
-        for link_id in hit:
-            if graph.link_kind(link_id).lower() == "drop":
-                self.drop_from_cell = from_cell
-                self.drop_landing_cell = landing_cell
-                self.drop_link_id = link_id
-                return
+    def note_airborne(self) -> None:
+        """Boten lämnade marken — nästa grounded observation är en landning."""
+        self._airborne = True
+
+    def note_missing_landing(self, position) -> None:
+        """Landning efter luft på mark som meshen saknar (classify=MISSING)."""
+        self.note_missing_ground(position)
+        if self._airborne:
+            self._airborne = False
+            self.drop_from_cell = self.last_cell
+            self.drop_landing_cell = None
+            self.drop_link_id = None
+
+    @staticmethod
+    def _landing_link(from_cell: int, landing_cell: int, graph: GraphContract):
+        hit = (graph.links_by_cells.get((from_cell, landing_cell), ())
+               or graph.fuzzy_links(from_cell, landing_cell))
+        return hit[0] if hit else None
 
 
 @dataclass(eq=False)
