@@ -21,8 +21,9 @@ python3 scripts/obducera.py --serie ~/lab/t1h --regim kedjad --out atgarder.json
 ```
 
 Schema: `verktygslada/obducera/2`. Kontrakt: `toolbox/obduktion/KONTRAKT.md`.
-Unknown-kluster bär `(arm, ben)`. Bortfiltrerade regimer redovisas i
-`exkluderade_regimer` (kastas aldrig tyst).
+Unknown-kluster bär `(arm, ben)`. Alltid tre populationer
+(`alla_giltiga_N*`, `kedjad_N*`, `teleport_efter_fel_N*`) med etikett
+på varje kluster/åtgärd. T1h kapas till N=min(n_hela).
 Tester: `python3 -m unittest toolbox.obduktion.tests.test_obduktion`.
 
 Återanvänder peak_drop_150-semantiken (samma reset som `timtest_ben`) och

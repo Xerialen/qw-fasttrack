@@ -11,6 +11,7 @@ from .dump import cell_str, lank_str, q, q_xyz
 STAMP_CELL_KEYS = ("cell_id", "cell")
 STAMP_LINK_KEYS = ("link_id", "link", "lank", "aktiv_lank", "chosen_link")
 T1H_CYKEL = re.compile(r"^c(\d{3})$")
+T1H_BEN = ("ut_ring", "in_ring", "ut_tunnel", "in_tunnel", "ut_vast", "in_vast")
 ATTEMPT = re.compile(r"^attempt_(\d+)\.jsonl$")
 META_SKIP = frozenset({"ogiltig_tic", "kasserad"})
 
@@ -335,6 +336,58 @@ def apply_regim_filter(forsok: list[dict], regim: str) -> tuple[list[dict], dict
         "n_forsok_exkluderade": n_in - len(kept),
     }
     return kept, filt
+
+
+def n_hela_per_arm(forsok: list[dict]) -> dict[str, int]:
+    """Högsta cykelnummer där alla sex T1h-ben finns, per arm (konsekutivt från 1)."""
+    by_arm: dict[str, dict[int, set[str]]] = {}
+    for f in forsok:
+        if f.get("layout") != "t1h" or f.get("cykel") is None:
+            continue
+        by_arm.setdefault(f["arm"], {}).setdefault(f["cykel"], set()).add(f["ben"])
+    out: dict[str, int] = {}
+    for arm, cycles in by_arm.items():
+        n = 0
+        c = 1
+        while c in cycles and set(T1H_BEN) <= cycles[c]:
+            n = c
+            c += 1
+        if n:
+            out[arm] = n
+    return out
+
+
+def apply_kap(forsok: list[dict]) -> tuple[list[dict], dict]:
+    """Kapa till N = min(n_hela) när minst en arm har hela cykler."""
+    hela = n_hela_per_arm(forsok)
+    if not hela:
+        return list(forsok), {
+            "n": None,
+            "per_arm": {},
+            "kastade_cykler": {},
+        }
+    n = min(hela.values())
+    kept = []
+    kastade: dict[str, list[int]] = {arm: [] for arm in hela}
+    seen_drop: dict[str, set[int]] = {arm: set() for arm in hela}
+    for f in forsok:
+        if f.get("layout") == "t1h" and f.get("cykel") is not None and f["cykel"] > n:
+            arm = f["arm"]
+            seen_drop.setdefault(arm, set()).add(f["cykel"])
+            continue
+        kept.append(f)
+    for arm, cyk in seen_drop.items():
+        kastade[arm] = sorted(cyk)
+    return kept, {
+        "n": n,
+        "per_arm": {k: hela[k] for k in sorted(hela)},
+        "kastade_cykler": {k: kastade.get(k, []) for k in sorted(hela)},
+    }
+
+
+def population_etikett(kind: str, n_kap: int | None) -> str:
+    suffix = f"N{n_kap}" if n_kap is not None else "Nall"
+    return f"{kind}_{suffix}"
 
 
 def merge_navmesh(ticks_stamps: list[Any]) -> Any:

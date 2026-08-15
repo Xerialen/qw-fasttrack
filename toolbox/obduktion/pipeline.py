@@ -1,15 +1,22 @@
 """obducera: serie → händelser → kluster → prioriterad åtgärdslista."""
 from __future__ import annotations
 
-from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from .adapter import apply_regim_filter, discover_forsok, load_ticks, merge_navmesh
+from .adapter import (apply_kap, discover_forsok, load_ticks, merge_navmesh,
+                      population_etikett)
 from .dump import SCHEMA
 from .klassa import finalize_handelse, klassa_forsok
 from .kluster import (klustra, numrera_och_prioritera, raknare,
                       tilldela_handelse_id)
+
+POP_KINDS = ("alla_giltiga", "kedjad", "teleport_efter_fel")
+POP_PREFIX = {
+    "alla_giltiga": ("G", "GK"),
+    "kedjad": ("H", "K"),
+    "teleport_efter_fel": ("X", "XK"),
+}
 
 
 def _process_forsok(forsok: list[dict]) -> tuple[list[dict], list[Any], list[Any],
@@ -33,8 +40,17 @@ def _process_forsok(forsok: list[dict]) -> tuple[list[dict], list[Any], list[Any
     return raw_events, stamps, contracts, {"stamplade": n_stamped, "unknown": n_unknown}
 
 
+def _stamp_population(handelser: list[dict], kluster: list[dict],
+                      atgarder: list[dict], etikett: str) -> None:
+    for k in kluster:
+        k["population"] = etikett
+    for a in atgarder:
+        a["population"] = etikett
+
+
 def _finalize_set(raw_events: list[dict], hid_prefix: str, kid_prefix: str,
-                  with_atgarder: bool) -> tuple[list[dict], list[dict], list[dict]]:
+                  etikett: str, with_atgarder: bool
+                  ) -> tuple[list[dict], list[dict], list[dict]]:
     ordered = tilldela_handelse_id(raw_events, prefix=hid_prefix)
     handelser = []
     for i, ev in enumerate(ordered, 1):
@@ -42,41 +58,42 @@ def _finalize_set(raw_events: list[dict], hid_prefix: str, kid_prefix: str,
     kluster, atgarder = numrera_och_prioritera(klustra(handelser), prefix=kid_prefix)
     if not with_atgarder:
         atgarder = []
+    _stamp_population(handelser, kluster, atgarder, etikett)
     return handelser, kluster, atgarder
 
 
-def _exkluderade_sektion(dropped: list[dict], raw_events: list[dict],
-                         bind: dict) -> dict:
-    handelser, kluster, _ = _finalize_set(raw_events, "X", "XK", with_atgarder=False)
-    by_regim: dict[str, list[dict]] = defaultdict(list)
-    forsok_by_regim: dict[str, set[str]] = defaultdict(set)
-    for f in dropped:
-        forsok_by_regim[f["regim"]].add(f["forsok_id"])
-    hid_to_regim = {h["id"]: h["regim"] for h in handelser}
-    for h in handelser:
-        by_regim[h["regim"]].append(h)
-    # kluster per regim: de vars alla händelser delar regimen
-    kluster_by_regim: dict[str, list[dict]] = defaultdict(list)
-    for k in kluster:
-        regs = {hid_to_regim.get(i) for i in k["handelse_id"]}
-        if len(regs) == 1:
-            kluster_by_regim[next(iter(regs))].append(k)
-    per_regim = {}
-    for regim in sorted(set(forsok_by_regim) | set(by_regim)):
-        per_regim[regim] = raknare(
-            by_regim.get(regim, []),
-            kluster_by_regim.get(regim, []),
-            len(forsok_by_regim.get(regim, ())),
-        )
-    return {
-        "n_forsok": len(dropped),
-        "n_handelser": len(handelser),
-        "n_kluster": len(kluster),
+def _pop_members(giltiga: list[dict], kind: str) -> list[dict]:
+    if kind == "alla_giltiga":
+        return list(giltiga)
+    if kind == "kedjad":
+        return [f for f in giltiga if f["regim"] == "kedjad"]
+    return [f for f in giltiga if f["regim"] in ("teleport", "teleport_efter_fel")]
+
+
+def _evidens_kind(regim: str) -> str:
+    if regim == "alla":
+        return "alla_giltiga"
+    if regim == "teleport":
+        return "teleport_efter_fel"
+    return "kedjad"
+
+
+def _population_obj(kind: str, n_kap: int | None, members: list[dict],
+                    raw: list[dict], bind: dict, with_atgarder: bool) -> dict:
+    etikett = population_etikett(kind, n_kap)
+    hid, kid = POP_PREFIX[kind]
+    handelser, kluster, atgarder = _finalize_set(
+        raw, hid, kid, etikett, with_atgarder)
+    counts = raknare(handelser, kluster, len(members))
+    out = {
+        "population": etikett,
+        "n_kap": n_kap,
+        **counts,
         "bind_statistik": bind,
-        "per_regim": per_regim,
         "handelser": handelser,
         "kluster": kluster,
     }
+    return out, atgarder
 
 
 def obducera(serie: str | Path, *,
@@ -91,20 +108,42 @@ def obducera(serie: str | Path, *,
     if arm not in (None, "A", "B", "AB"):
         raise ValueError("arm måste vara A, B, AB eller utelämnad")
     arm_arg = None if arm in (None, "AB") else arm
-    forsok = discover_forsok(serie_p, arm_arg, ent, stamp_p)
-    kept, filt = apply_regim_filter(forsok, regim)
-    kept_ids = {id(f) for f in kept}
-    dropped = [f for f in forsok if id(f) not in kept_ids]
+    upptackta = discover_forsok(serie_p, arm_arg, ent, stamp_p)
+    giltiga, kap = apply_kap(upptackta)
+    n_kap = kap["n"]
 
-    raw_kept, stamps_k, contracts_k, bind_k = _process_forsok(kept)
-    raw_drop, stamps_d, contracts_d, bind_d = _process_forsok(dropped)
+    ev_kind = _evidens_kind(regim)
+    evidens = _pop_members(giltiga, ev_kind)
+    filt = {
+        "regim": regim,
+        "n_forsok_fore_kap": len(upptackta),
+        "n_forsok_in": len(giltiga),
+        "n_forsok_behallna": len(evidens),
+        "n_forsok_exkluderade": len(giltiga) - len(evidens),
+    }
 
-    handelser, kluster, atgarder = _finalize_set(
-        raw_kept, "H", "K", with_atgarder=True)
-    excl = _exkluderade_sektion(dropped, raw_drop, bind_d)
+    pop_cache: dict[str, dict] = {}
+    all_stamps: list[Any] = []
+    all_contracts: list[Any] = []
+    for kind in POP_KINDS:
+        members = _pop_members(giltiga, kind)
+        raw, stamps, contracts, bind = _process_forsok(members)
+        all_stamps.extend(stamps)
+        all_contracts.extend(contracts)
+        obj, atg = _population_obj(
+            kind, n_kap, members, raw, bind,
+            with_atgarder=(kind == ev_kind),
+        )
+        pop_cache[kind] = (obj, atg)
 
+    populationer = {}
+    for kind in POP_KINDS:
+        et = population_etikett(kind, n_kap)
+        populationer[et] = pop_cache[kind][0]
+
+    ev, ev_atgarder = pop_cache[ev_kind]
     if arm in (None, "AB"):
-        arms_seen = sorted({f["arm"] for f in forsok if f["arm"] in ("A", "B")})
+        arms_seen = sorted({f["arm"] for f in giltiga if f["arm"] in ("A", "B")})
         arm_out = "".join(arms_seen) if arms_seen else "AB"
         if arm_out not in ("A", "B", "AB"):
             arm_out = "AB"
@@ -117,14 +156,15 @@ def obducera(serie: str | Path, *,
         "serie": serie_p.name,
         "arm": arm_out,
         "regim": regim,
-        "graph_contract": _one_or_unknown(contracts_k + contracts_d),
-        "navmesh_stamp": merge_navmesh(stamps_k + stamps_d),
-        "bind_statistik": bind_k,
+        "graph_contract": _one_or_unknown(all_contracts),
+        "navmesh_stamp": merge_navmesh(all_stamps),
+        "bind_statistik": ev["bind_statistik"],
+        "kap": kap,
         "filter": filt,
-        "handelser": handelser,
-        "kluster": kluster,
-        "atgarder": atgarder,
-        "exkluderade_regimer": excl,
+        "handelser": ev["handelser"],
+        "kluster": ev["kluster"],
+        "atgarder": ev_atgarder,
+        "populationer": populationer,
     }
 
 

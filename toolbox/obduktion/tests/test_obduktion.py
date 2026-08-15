@@ -52,7 +52,11 @@ class TestMiniSerie(unittest.TestCase):
         self.assertEqual(self.doc["kommando"], "obducera")
         self.assertEqual(self.doc["serie"], "mini_serie")
         self.assertEqual(self.doc["regim"], "kedjad")
-        self.assertIn("exkluderade_regimer", self.doc)
+        pops = self.doc["populationer"]
+        self.assertEqual(len(pops), 3)
+        self.assertTrue(any(k.startswith("alla_giltiga_") for k in pops))
+        self.assertTrue(any(k.startswith("kedjad_") for k in pops))
+        self.assertTrue(any(k.startswith("teleport_efter_fel_") for k in pops))
 
     def test_determinism_byteidentisk(self):
         again = dumps(obducera(FIXTURE, arm="AB", regim="kedjad"))
@@ -65,19 +69,24 @@ class TestMiniSerie(unittest.TestCase):
         self.assertEqual(list(parsed.keys()), sorted(parsed.keys()))
 
     def test_regim_filtrerar_teleport(self):
-        # c003 är teleport_efter_fel — inte i kedjad-listan, men i exkluderade
         ids = {h["forsok_id"] for h in self.doc["handelser"]}
         self.assertNotIn("A/c003/in_ring", ids)
         self.assertGreater(self.doc["filter"]["n_forsok_exkluderade"], 0)
-        xids = {h["forsok_id"] for h in self.doc["exkluderade_regimer"]["handelser"]}
+        tel = next(v for k, v in self.doc["populationer"].items()
+                   if k.startswith("teleport_efter_fel_"))
+        xids = {h["forsok_id"] for h in tel["handelser"]}
         self.assertIn("A/c003/in_ring", xids)
+        self.assertTrue(tel["kluster"])
+        self.assertTrue(all(k["population"].startswith("teleport_efter_fel_")
+                            for k in tel["kluster"]))
 
     def test_regim_alla_tar_med_teleport(self):
         doc = obducera(FIXTURE, regim="alla")
         ids = {h["forsok_id"] for h in doc["handelser"]}
         self.assertIn("A/c003/in_ring", ids)
-        self.assertEqual(doc["exkluderade_regimer"]["n_forsok"], 0)
-        self.assertEqual(doc["exkluderade_regimer"]["handelser"], [])
+        self.assertTrue(all(k["population"].startswith("alla_giltiga_")
+                            for k in doc["kluster"]))
+        self.assertEqual(len(doc["populationer"]), 3)
 
     def test_fall_inte_avsett_pa_in(self):
         klasser = {h["klass"] for h in self.doc["handelser"]
@@ -147,6 +156,15 @@ class TestMiniSerie(unittest.TestCase):
         for a in self.doc["atgarder"]:
             self.assertTrue(a["forsok_id"])
             self.assertIn(a["klass"], ("fall", "fastnad", "timeout", "stall"))
+            self.assertTrue(a.get("population", "").startswith("kedjad_"))
+
+    def test_kluster_bar_population(self):
+        for k in self.doc["kluster"]:
+            self.assertTrue(k["population"].startswith("kedjad_"))
+        for et, pop in self.doc["populationer"].items():
+            self.assertEqual(pop["population"], et)
+            for k in pop["kluster"]:
+                self.assertEqual(k["population"], et)
 
     def test_forbjudna_falt(self):
         for k in ("generated_at", "host", "path", "request_id", "duration_ms"):
@@ -176,9 +194,10 @@ class TestStallOchTimeout(unittest.TestCase):
         kedjad = obducera(serie, regim="kedjad")
         self.assertEqual(kedjad["filter"]["n_forsok_behallna"], 0)
         self.assertEqual(kedjad["handelser"], [])
-        self.assertTrue(any(h["klass"] == "timeout"
-                            for h in kedjad["exkluderade_regimer"]["handelser"]))
-        self.assertGreater(kedjad["exkluderade_regimer"]["n_forsok"], 0)
+        tel = next(v for k, v in kedjad["populationer"].items()
+                   if k.startswith("teleport_efter_fel_"))
+        self.assertTrue(any(h["klass"] == "timeout" for h in tel["handelser"]))
+        self.assertGreater(tel["n_forsok"], 0)
 
 
 if __name__ == "__main__":
