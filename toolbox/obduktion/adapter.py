@@ -374,9 +374,9 @@ def _undanta_ut(ben: str, meta: dict) -> bool:
 
 
 def load_ticks(forsok: dict) -> list[dict]:
+    ref = forsok.get("_arm_stamp", forsok.get("ref_stamp"))
     return list(iter_ticks(forsok["jsonl"], forsok["ent"],
-                           forsok.get("stamplar"), forsok.get("serie"),
-                           forsok.get("ref_stamp")))
+                           forsok.get("stamplar"), forsok.get("serie"), ref))
 
 
 def load_attr(forsok: dict) -> dict:
@@ -482,8 +482,13 @@ def apply_kap(forsok: list[dict]) -> tuple[list[dict], dict]:
     }
 
 
-def _manifest_stamp(stamplar: Path | None, serie: Path | None) -> tuple[str | None, str | None]:
-    """Grafidentiteten ur A:s manifest, om det finns. (stamp, schema)."""
+def _manifest_stamps(stamplar: Path | None, serie: Path | None):
+    """Per-arm grafidentiteter ur A:s manifest. Returnerar {arm: (stamp, schema)}.
+
+    Omstämplade manifestet bär ``per_arm`` (två armar = två identiteter). Äldre
+    manifest bar en enda top-level ``graph_stamp`` och mappas som ``"*"``
+    (wildcard: gäller alla armar).
+    """
     for base in (stamplar, serie):
         if base is None:
             continue
@@ -494,43 +499,95 @@ def _manifest_stamp(stamplar: Path | None, serie: Path | None) -> tuple[str | No
             data = json.loads(p.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             continue
-        if isinstance(data, dict):
-            s = stamp_id_str(data.get("graph_stamp"))
-            if s:
-                return s, data.get("schema")
-    return None, None
+        if not isinstance(data, dict):
+            continue
+        per_arm = data.get("per_arm")
+        if isinstance(per_arm, dict):
+            out = {}
+            for arm, v in per_arm.items():
+                if isinstance(v, dict):
+                    s = stamp_id_str(v.get("graph_stamp"))
+                    if s:
+                        out[str(arm)] = (s, v.get("schema"))
+            if out:
+                return out
+        s = stamp_id_str(data.get("graph_stamp"))
+        if s:
+            return {"*": (s, data.get("schema"))}
+    return None
+
+
+def _arm_ref(forsok: dict, referenser: dict) -> str | None:
+    """Stampen ett försök ska valideras mot: dess arms, annars wildcard."""
+    entry = referenser.get(forsok.get("arm"), referenser.get("*"))
+    if entry is None:
+        return None
+    return None if entry[0] == "unknown" else entry[0]
 
 
 def resolve_graph_stamp(forsok: list[dict], stamplar: Path | None,
                         serie: Path | None) -> dict:
-    """Vilken graf serien är mätt mot — manifestet först, radernas stämplar sedan.
+    """Per-arm referens: manifestets ``per_arm`` först, rader per arm sedan.
 
-    Detta är obduktionens motsvarighet till B:s ``PlanContract``: ETT värde som
-    raderna sedan valideras mot. Ordningen är inte godtycklig. Manifestet är A:s
-    egen deklaration och väger tyngst. Saknas det får raderna tala, men bara om
-    de är eniga — är de det inte finns ingen referens att välja, och att välja
-    majoriteten vore precis den gissning kontraktet förbjuder. Då blir varje
-    stämplad rad obunden i stället.
+    Varje försök får ``_arm_stamp`` satt här (sin arms stamp); ``load_ticks``
+    läser det. Konflikt = två olika stamps INOM samma arm — den armen lämnas
+    ovaliderad (``_arm_stamp=None``). Två armar med olika stamps är INTE en
+    konflikt; det är per-arm-designen.
     """
-    stamp, schema = _manifest_stamp(stamplar, serie)
-    if stamp:
-        return {"referens": stamp, "kalla": "manifest", "schema": schema}
-
-    seen: set[str] = set()
-    for f in forsok:
-        for tk in iter_ticks(f["jsonl"], f["ent"], f.get("stamplar"), f.get("serie")):
-            gs = tk.get("graph_stamp")
-            if gs:
-                seen.add(gs)
+    mani = _manifest_stamps(stamplar, serie)
+    if mani is not None:
+        referenser = dict(mani)
+        kalla = "manifest"
+    else:
+        referenser = {}
+        kalla = "rader"
+        by_arm: dict[str, list[dict]] = {}
+        for f in forsok:
+            by_arm.setdefault(f.get("arm") or "?", []).append(f)
+        konflikt = False
+        nagon_stamp = False
+        for arm, flist in by_arm.items():
+            seen: set[str] = set()
+            for f in flist:
+                for tk in iter_ticks(f["jsonl"], f["ent"],
+                                     f.get("stamplar"), f.get("serie")):
+                    gs = tk.get("graph_stamp")
+                    if gs:
+                        seen.add(gs)
+                        if len(seen) > 1:
+                            break
                 if len(seen) > 1:
                     break
-        if len(seen) > 1:
-            break
-    if len(seen) == 1:
-        return {"referens": next(iter(seen)), "kalla": "rader", "schema": None}
-    if len(seen) > 1:
-        return {"referens": "unknown", "kalla": "konflikt", "schema": None}
-    return {"referens": "unknown", "kalla": "ingen", "schema": None}
+            if len(seen) == 1:
+                referenser[arm] = (next(iter(seen)), None)
+                nagon_stamp = True
+            elif len(seen) > 1:
+                referenser[arm] = ("unknown", None)
+                konflikt = True
+            else:
+                referenser[arm] = ("unknown", None)
+        if konflikt:
+            kalla = "konflikt"
+        elif nagon_stamp:
+            kalla = "rader"
+        else:
+            kalla = "ingen"
+
+    for f in forsok:
+        f["_arm_stamp"] = _arm_ref(f, referenser)
+
+    vals = [v[0] for v in referenser.values()]
+    if vals and all(v == vals[0] and v != "unknown" for v in vals):
+        top = vals[0]
+    else:
+        top = "unknown"
+    schema = next((v[1] for v in referenser.values() if v[1]), None)
+    return {
+        "referens": top,
+        "kalla": kalla,
+        "schema": schema,
+        "per_arm": {arm: v[0] for arm, v in referenser.items()},
+    }
 
 
 def population_etikett(kind: str, n_kap: int | None) -> str:

@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from toolbox.obduktion.adapter import (extract_stamp, iter_ticks,
+from toolbox.obduktion.adapter import (extract_stamp, iter_ticks, load_ticks,
                                        resolve_graph_stamp, stamp_id_str)
 
 STAMP = "13090435456435551592"
@@ -178,6 +178,102 @@ class SidecarAlignment(unittest.TestCase):
             self.assertEqual(len(ticks), 1)
             self.assertEqual(ticks[0]["cell"], "530")
             self.assertEqual(ticks[0]["bind"], "stamped")
+
+
+class ResolveGraphStampPerArm(unittest.TestCase):
+    """Per-arm-grafvalidering: A och B bär olika stamp efter omstämplingen."""
+    STAMP_A = "13090435456435551592"
+    STAMP_B = "906595427771298736"
+
+    def _serie(self, tmp, rows_by_arm, manifest=None):
+        serie = Path(tmp) / "serie"
+        forsok = []
+        for arm, files in rows_by_arm.items():
+            d = serie / arm / "c001"
+            d.mkdir(parents=True)
+            for name, rows in files.items():
+                p = d / f"{name}.jsonl"
+                p.write_text("".join(json.dumps(r) + "\n" for r in rows),
+                             encoding="utf-8")
+                forsok.append({"jsonl": p, "ent": 1, "stamplar": None,
+                               "serie": serie, "arm": arm})
+        if manifest is not None:
+            (serie / "manifest.json").write_text(json.dumps(manifest),
+                                                 encoding="utf-8")
+        return serie, forsok
+
+    def _row(self, stamp, cell=5):
+        return {"t": 1.0, "cell": cell, "graph_stamp": stamp,
+                "players": [{"ent": 1, "origin": [0, 0, 0], "on_ground": True}]}
+
+    def test_per_arm_manifest_sets_arm_stamps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            serie, forsok = self._serie(
+                tmp,
+                {"A": {"in_ring": [self._row(self.STAMP_A)]},
+                 "B": {"in_ring": [self._row(self.STAMP_B)]}},
+                manifest={"per_arm": {
+                    "A": {"graph_stamp": self.STAMP_A, "schema": "qw-nav-graph/1"},
+                    "B": {"graph_stamp": self.STAMP_B, "schema": "qw-nav-graph/1"}}})
+            got = resolve_graph_stamp(forsok, None, serie)
+            self.assertEqual(got["kalla"], "manifest")
+            self.assertEqual(got["referens"], "unknown")  # armar skiljer sig
+            self.assertEqual(got["per_arm"], {"A": self.STAMP_A, "B": self.STAMP_B})
+            self.assertEqual({f["arm"]: f["_arm_stamp"] for f in forsok},
+                             {"A": self.STAMP_A, "B": self.STAMP_B})
+
+    def test_load_ticks_validates_against_its_arm(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            serie, forsok = self._serie(
+                tmp,
+                {"A": {"in_ring": [self._row(self.STAMP_A)]},
+                 "B": {"in_ring": [self._row(self.STAMP_B)]}},
+                manifest={"per_arm": {
+                    "A": {"graph_stamp": self.STAMP_A},
+                    "B": {"graph_stamp": self.STAMP_B}}})
+            resolve_graph_stamp(forsok, None, serie)
+            for f in forsok:
+                ticks = load_ticks(f)
+                self.assertEqual(len(ticks), 1)
+                self.assertEqual(ticks[0]["bind"], "stamped")
+                self.assertFalse(ticks[0]["stamp_avvik"],
+                                 f"arm {f['arm']} felaktigt avvik")
+
+    def test_wrong_arm_stamp_on_a_row_is_unbound(self):
+        # En A-rad som bär B:s stamp, validerad mot A:s stamp => obunden.
+        with tempfile.TemporaryDirectory() as tmp:
+            serie, forsok = self._serie(
+                tmp,
+                {"A": {"in_ring": [self._row(self.STAMP_B)]}},
+                manifest={"per_arm": {"A": {"graph_stamp": self.STAMP_A}}})
+            resolve_graph_stamp(forsok, None, serie)
+            ticks = load_ticks(forsok[0])
+            self.assertEqual(ticks[0]["cell"], "unknown")
+            self.assertTrue(ticks[0]["stamp_avvik"])
+
+    def test_same_arm_conflict_is_kept(self):
+        # Två olika stamp INOM samma arm = äkta konflikt, armen ovaliderad.
+        with tempfile.TemporaryDirectory() as tmp:
+            serie, forsok = self._serie(
+                tmp,
+                {"A": {"in_ring": [self._row(self.STAMP_A), self._row(self.STAMP_B)]}},
+                manifest=None)
+            got = resolve_graph_stamp(forsok, None, serie)
+            self.assertEqual(got["kalla"], "konflikt")
+            self.assertEqual(got["per_arm"], {"A": "unknown"})
+            self.assertTrue(all(f["_arm_stamp"] is None for f in forsok))
+
+    def test_legacy_top_level_manifest_applies_to_all_arms(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            serie, forsok = self._serie(
+                tmp,
+                {"A": {"in_ring": [self._row(self.STAMP_A)]},
+                 "B": {"in_ring": [self._row(self.STAMP_A)]}},
+                manifest={"graph_stamp": self.STAMP_A, "schema": "qw-nav-graph/1"})
+            got = resolve_graph_stamp(forsok, None, serie)
+            self.assertEqual(got["referens"], self.STAMP_A)
+            self.assertEqual(got["kalla"], "manifest")
+            self.assertTrue(all(f["_arm_stamp"] == self.STAMP_A for f in forsok))
 
 
 if __name__ == "__main__":
