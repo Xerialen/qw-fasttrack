@@ -1,11 +1,12 @@
-# KONTRAKT: `obducera` åtgärdslista (verktygslada/obducera/2)
+# KONTRAKT: `obducera` åtgärdslista (verktygslada/obducera/3)
 
-Schema **v2**. Ändring 2026-08-15 (tillägg, terra-datapak-revision):
-exkluderad-sektionen följer populationsmodellen — tre explicita
+Schema **v3** (I-justering efter deepseek-korsreview). Ersätter v2.
+Skrivet **före** v3-koden. Semantikändringar: fall binds till landning,
+UT-peak återställs aldrig, stall utan origin emitteras inte.
+
+Schema **v2** (bevarad): populationsmodellen — tre explicita
 populationer, aldrig filtrerade räknare utan etikett. Kapning A76–79
 är nämnaren N=75, inte händelseförlust.
-
-Skrivet **före** v2-koden som implementerar populationerna.
 Ägare: spår I (grok). Bindande för CLI, MCP och framtida webbklient.
 
 Paritet (REVISION 1): samma anrop ger **byte-identisk kanonikaliserad JSON**.
@@ -27,9 +28,9 @@ alla tre populationer redovisas alltid under `populationer`.
 
 | klass         | källa (ordning) |
 |---------------|-----------------|
-| `fall`        | peak_drop_150 (Δz > 150 från löpande peak), **inte** UT-undantaget |
-| `avsett_drop` | samma detektor på UT-ben med `undanta=true` (filnamn `ut_*` eller meta) |
-| `stall`       | rad/event med `ev=bot_stall` eller stall_recorder-kuvert; `reason` bevaras |
+| `fall`        | peak_drop_150 på IN (Δz > 150 från löpande peak; peak återställs) |
+| `avsett_drop` | UT-ben (`undanta=true`): högst en emission per försök vid första korsning; peak återställs **aldrig** (paritet `timtest_ben.py:98–107`) |
+| `stall`       | `ev=bot_stall` / stall_recorder **med origin**; utan origin emitteras ingen händelse |
 | `timeout`     | försöks-meta/summary `utfall=timeout` |
 | `fastnad`     | försöks-meta `utfall` ∈ {`fastnad`, `fall_plus_fastnad`} |
 
@@ -39,9 +40,20 @@ population — ogiltig data).
 
 ## Bindning (cell / länk) — gissa aldrig
 
-Stämpelfält läses om de **finns på den triggande raden** (eller dess
-sidovagn `*.stamp.jsonl` / `--stamplar`, samma radindex eller `t` avrundat
-till 3 decimaler):
+**Primär input** är mät-JSONL (`t` + `players[].origin` / `on_ground`,
+eller stall-kuvert). Spår A:s stämplade rader
+(`{t, bot, cell, verdict, schema, graph_stamp}` — ingen `origin`/`players`)
+är **sidovagn**, aldrig primär input. De läses via `--stamplar` eller
+`*.stamp.jsonl` (radindex eller `t` avrundat till 3 decimaler) och
+fogas på mät-tickar. Per-försöks-`.attr.json` (`attribution.cell_id` /
+`drop_landing_cell`) är likaså sidovagn, konsumerad när landningstickens
+cell saknas.
+
+**Fall och avsett_drop binds till LANDNINGEN**, inte luft-triggerticken:
+första tick med `on_ground=true` efter Δz-slaget, annars
+`.attr.json`-landningscellen om den finns. xyz → cell-id gissas aldrig.
+
+Stämpelfält läses om de **finns på landningsticken** (eller sidovagn):
 
 - cell: `cell_id` \| `cell`
 - länk: `link_id` \| `link` \| `lank` \| `aktiv_lank` \| `chosen_link`
@@ -118,7 +130,9 @@ handelser         [Handelse, ...]
 kluster           [Kluster & {population}, ...]
 ```
 
-Alla nio räknare är alltid närvarande. `atgarder` ligger **inte** i
+Alla **åtta** räknare är alltid närvarande (`n_forsok`, `n_handelser`,
+`n_kluster`, `n_fall`, `n_avsett_drop`, `n_stall`, `n_timeout`,
+`n_fastnad`). `atgarder` ligger **inte** i
 populationen — åtgärdslistan är evidensfiltrerad (default kedjad) på
 rotnivå, och varje rad bär samma `population`-etikett.
 
@@ -155,7 +169,6 @@ med `klass` ∈ {`fall`, `fastnad`, `timeout`, `stall`} sorterade efter:
    | `origin`, `centroid`, `locus` (xyz) | 2 decimaler |
    | `t` | 3 decimaler |
    | `drop_u`, `spridning_u` | 1 decimal |
-   | andelar (`andel`) | 4 decimaler |
 
    Avrundning: vanliga runda-halv-jämn (`round` i IEEE, Python 3).
    Heltal förblir heltal. `null` tillåts bara där schemat säger Optional.
@@ -175,7 +188,7 @@ med `klass` ∈ {`fall`, `fastnad`, `timeout`, `stall`} sorterade efter:
 ## Rotobjekt
 
 ```
-schema               "verktygslada/obducera/2"
+schema               "verktygslada/obducera/3"
 kommando             "obducera"
 serie                basnamn
 arm                  "A" | "B" | "AB"
