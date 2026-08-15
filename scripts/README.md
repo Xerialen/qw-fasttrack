@@ -32,3 +32,4 @@ Changes here count as code changes for the documentation contract (see
 - `combat_lock.py --json <qw-analyze-full.json> [--out r.json]` — sekunder per spelare
   beskjuten inom POV (120°) utan att skjuta tillbaka (fönster 1.2 s). Kör qw-analyze
   `-view full -include positions,view` först.
+- `obducera.py --serie DIR [--regim kedjad] [--arm A|B|AB]` — batch-obduktion (spår I): JSONL → klassade händelser → kluster → prioriterad åtgärdslista. Default evidensfilter `regim=kedjad`. Utan A-stämplar: cell/länk = unknown (gissas aldrig). Kontrakt: `toolbox/obduktion/KONTRAKT.md`. Samma JSON via MCP-verktyget `obducera` (read-only).

@@ -1,0 +1,3 @@
+{"t": 5.0, "wall": 5.0, "players": [{"ent": 1, "origin": [-500.0, -700.0, -16.0], "on_ground": true}]}
+{"t": 5.5, "wall": 5.5, "players": [{"ent": 1, "origin": [-501.0, -700.0, -16.0], "on_ground": true}]}
+{"t": 30.0, "wall": 30.0, "players": [{"ent": 1, "origin": [-502.0, -701.0, -16.0], "on_ground": true}]}

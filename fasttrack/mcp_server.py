@@ -128,6 +128,16 @@ TOOLS = {
     },
 }
 
+# spår I — read-only; samma bytes som scripts/obducera.py (KONTRAKT.md)
+try:
+    _repo = Path(__file__).resolve().parents[1]
+    if str(_repo) not in sys.path:
+        sys.path.insert(0, str(_repo))
+    from toolbox.obduktion.mcp_hook import TOOL as _OBDUCERA_TOOL
+    TOOLS["obducera"] = _OBDUCERA_TOOL
+except Exception as _obducera_exc:  # låt övriga verktyg leva om import faller
+    sys.stderr.write(f"obducera MCP hook skipped: {_obducera_exc}\n")
+
 
 def respond(req):
     method = req.get("method")
@@ -149,8 +159,12 @@ def respond(req):
         if tool is None:
             raise ValueError(f"unknown tool {params.get('name')}")
         value = tool["fn"](params.get("arguments") or {})
+        if tool.get("canonical") and isinstance(value, str):
+            _text = value
+        else:
+            _text = json.dumps(value, ensure_ascii=False, indent=1)
         result = {"content": [{"type": "text",
-                               "text": json.dumps(value, ensure_ascii=False, indent=1)}],
+                               "text": _text}],
                   "isError": False}
     else:
         raise ValueError(f"unknown method {method}")
