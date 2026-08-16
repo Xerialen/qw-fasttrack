@@ -9,6 +9,7 @@ Ett kommando-API, tre fronter. Paritet = kanonikaliserad JSON mot
 | `heatmap` | A | — | — | — | — |
 | `stämpla` | A | — | — | — | — |
 | `fixa` | D | — | — | — | — |
+| `validera_klassning` | C | v1 på `toolbox/slice-merged` | `python3 -m toolbox.taxonomi` | ej ännu | — |
 
 ## obducera
 
@@ -29,3 +30,18 @@ Tester: `python3 -m unittest toolbox.obduktion.tests.test_obduktion`.
 Återanvänder peak_drop_150-semantiken (samma reset som `timtest_ben`) och
 stall-events-embryots per-cell-klustertanke (`match_snapshot._summarize`).
 Live-riggen rörs inte.
+
+
+## validera_klassning
+
+Runda 2: klassningsfil (jsonl `id`, `klass`, `evidens{}`) mot kandidatfil.
+Saknas obligatoriska evidensfält (rev 4) eller pekare in i kandidatens
+källor ⇒ raden avvisas, förslag `okand_ingen_fix` + `missing_*`.
+
+```
+python3 -m toolbox.taxonomi --klassning klassning.jsonl \
+    --kandidater kandidater-blind.jsonl --out rapport.json
+```
+
+Tester: `python3 -m unittest toolbox.taxonomi.tests.test_validera_klassning`.
+Klassar inte.
