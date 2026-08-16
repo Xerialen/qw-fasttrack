@@ -53,10 +53,29 @@ def _get(obj: Any, path: str) -> Any:
     return cur
 
 
+def _sokkarns_sokvag(s: str) -> str:
+    """Filväg ur en källa: första token, slash-normaliserad.
+
+    Kandidat-kallor bär ofta citat efter sökvägen ("fil.md §2").
+    """
+    tok = str(s).replace("\\", "/").strip().split()
+    return (tok[0] if tok else "").rstrip("/")
+
+
 def _fil_match(pekad: str, kalla: str) -> bool:
-    p = pekad.replace("\\", "/").rstrip("/")
-    k = str(kalla).replace("\\", "/").rstrip("/")
-    return p == k or p.endswith("/" + k) or k.endswith("/" + p) or p in k or k in p
+    """Exakt sökväg eller suffix på komponentgräns. Inte substring.
+
+    "O" får inte träffa WORK_LOGS/grok-stallceller.md.
+    "grok-stallceller.md" får träffa WORK_LOGS/grok-stallceller.md.
+    "celler.md" får inte (inte ett helt path-segment).
+    """
+    p = _sokkarns_sokvag(pekad)
+    k = _sokkarns_sokvag(kalla)
+    if not p or not k:
+        return False
+    if p == k:
+        return True
+    return k.endswith("/" + p) or p.endswith("/" + k)
 
 
 def las_jsonl(path: Path) -> list[dict]:

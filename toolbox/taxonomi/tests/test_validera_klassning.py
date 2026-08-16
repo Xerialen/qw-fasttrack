@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 
 from toolbox.taxonomi.validera_klassning import (  # noqa: E402
+    _fil_match,
     dumps,
     las_jsonl,
     main,
@@ -278,6 +279,38 @@ class TestValideraKlassning(unittest.TestCase):
         rader = las_jsonl(p)
         self.assertGreaterEqual(len(rader), 1)
         self.assertTrue(all("id" in r for r in rader))
+
+    def test_fil_match_o_substring_avvisas(self):
+        """Regression: fable-qa C-VALIDATOR, fil=O mot stallceller.md sec2."""
+        kalla = "WORK_LOGS/grok-stallceller.md §2"
+        self.assertFalse(_fil_match("O", kalla))
+        self.assertFalse(_fil_match("md", kalla))
+        self.assertFalse(_fil_match("celler.md", kalla))
+        self.assertFalse(_fil_match("stall", kalla))
+        kands = [_kand("NEG-SUB", [kalla])]
+        doc = validera([{
+            "id": "NEG-SUB",
+            "klass": "carve_origin",
+            "evidens": {
+                "pekare": [_pek("O")],
+                "falt": {
+                    "cell": "2544",
+                    "verdict": "covered",
+                    "cell_origin": [960, 288, 56],
+                },
+            },
+        }], kands)
+        r = doc["rader"][0]
+        self.assertEqual(r["utfall"], "avvisad")
+        self.assertTrue(any("kallor" in s for s in r["skal"]))
+
+    def test_fil_match_exakt_och_segmentsuffix(self):
+        kalla = "WORK_LOGS/grok-stallceller.md §2"
+        self.assertTrue(_fil_match("WORK_LOGS/grok-stallceller.md", kalla))
+        self.assertTrue(_fil_match("grok-stallceller.md", kalla))
+        self.assertTrue(_fil_match("WORK_LOGS/grok-stallceller.md §2", kalla))
+        self.assertFalse(_fil_match("", kalla))
+        self.assertFalse(_fil_match("WORK_LOGS", kalla))
 
 
 if __name__ == "__main__":
